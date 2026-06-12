@@ -1,0 +1,266 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:KSSQ-{YYYY}-{#####}",
+ "creation": "2026-06-04 00:00:00.000000",
+ "doctype": "DocType",
+ "document_type": "Document",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "external_id",
+  "resource_type",
+  "satusehat_resource_id",
+  "source_system",
+  "method",
+  "endpoint_path",
+  "import_section",
+  "import_status",
+  "imported_at",
+  "target_doctype",
+  "target_docname",
+  "approval_section",
+  "approval_status",
+  "approved_by",
+  "approved_at",
+  "rejection_reason",
+  "sync_section",
+  "sync_status",
+  "attempts",
+  "last_attempt_at",
+  "sent_at",
+  "error_message",
+  "payload_section",
+  "payload",
+  "fhir_payload",
+  "logs_section",
+  "logs"
+ ],
+ "fields": [
+  {
+   "fieldname": "external_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "External ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "resource_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "FHIR Resource Type",
+   "reqd": 1
+  },
+  {
+   "fieldname": "satusehat_resource_id",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "SatuSehat Resource ID",
+   "read_only": 1
+  },
+  {
+   "default": "khanza",
+   "fieldname": "source_system",
+   "fieldtype": "Data",
+   "label": "Source System",
+   "reqd": 1
+  },
+  {
+   "default": "POST",
+   "fieldname": "method",
+   "fieldtype": "Select",
+   "label": "SatuSehat Method",
+   "options": "POST\nPUT",
+   "reqd": 1
+  },
+  {
+   "description": "Optional relative path, for example /Encounter/{id}. If empty, ERPNext sends to /{resource_type}.",
+   "fieldname": "endpoint_path",
+   "fieldtype": "Data",
+   "label": "SatuSehat Endpoint Path"
+  },
+  {
+   "fieldname": "import_section",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Import"
+  },
+  {
+   "default": "pending",
+   "fieldname": "import_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Import Status",
+   "options": "pending\nprocessing\nimported\nfailed\nfailed_permanent",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "imported_at",
+   "fieldtype": "Datetime",
+   "label": "Imported At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "target_doctype",
+   "fieldtype": "Data",
+   "label": "Target DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "target_docname",
+   "fieldtype": "Dynamic Link",
+   "label": "Target Document",
+   "options": "target_doctype",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approval_section",
+   "fieldtype": "Section Break",
+   "label": "SatuSehat Approval"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "approval_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "SatuSehat Approval Status",
+   "options": "Pending\nApproved\nRejected",
+   "reqd": 1
+  },
+  {
+   "fieldname": "approved_by",
+   "fieldtype": "Link",
+   "label": "Approved By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approved_at",
+   "fieldtype": "Datetime",
+   "label": "Approved At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "rejection_reason",
+   "fieldtype": "Small Text",
+   "label": "Rejection Reason"
+  },
+  {
+   "fieldname": "sync_section",
+   "fieldtype": "Section Break",
+   "label": "SatuSehat Sync"
+  },
+  {
+   "default": "pending",
+   "fieldname": "sync_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "SatuSehat Status",
+   "options": "pending\nprocessing\nsent\nfailed\nfailed_permanent",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "label": "Attempts",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_attempt_at",
+   "fieldtype": "Datetime",
+   "label": "Last Attempt At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sent_at",
+   "fieldtype": "Datetime",
+   "label": "Sent At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error_message",
+   "fieldtype": "Small Text",
+   "label": "Error Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payload_section",
+   "fieldtype": "Section Break",
+   "label": "Payload"
+  },
+  {
+   "fieldname": "payload",
+   "fieldtype": "Code",
+   "label": "Original Khanza Payload",
+   "options": "JSON",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "fhir_payload",
+   "fieldtype": "Code",
+   "label": "FHIR Payload",
+   "options": "JSON",
+   "reqd": 1
+  },
+  {
+   "fieldname": "logs_section",
+   "fieldtype": "Section Break",
+   "label": "Logs"
+  },
+  {
+   "fieldname": "logs",
+   "fieldtype": "Table",
+   "label": "Logs",
+   "options": "Khanza SatuSehat Sync Log",
+   "read_only": 1
+  }
+ ],
+ "idx": 0,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-06-04 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Healthcare",
+ "name": "Khanza SatuSehat Queue",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Healthcare Administrator",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "external_id",
+ "track_changes": 1
+}
