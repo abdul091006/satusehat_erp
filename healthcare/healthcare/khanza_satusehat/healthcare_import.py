@@ -1,3 +1,5 @@
+import re
+
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
@@ -8,10 +10,30 @@ from .constants import (
     QUEUE_DOCTYPE,
     RESOURCE_TARGETS,
 )
+from .document_events import sync_all_queue_target_docstatus, sync_queue_target_docstatus
 from .utils import _as_dict, _json_dumps
 
+TARGET_SUBMIT_ROLES = ("System Manager", "Healthcare Administrator")
+TARGET_SUBMIT_PERMISSIONS = {
+	"read": 1,
+	"write": 1,
+	"create": 1,
+	"delete": 1,
+	"submit": 1,
+	"cancel": 1,
+	"amend": 1,
+	"report": 1,
+	"export": 1,
+	"print": 1,
+	"email": 1,
+	"share": 1,
+	"select": 1,
+}
 
-def ensure_khanza_custom_fields():
+def ensure_khanza_custom_fields(sync_existing=True, ensure_submit=True):
+	if ensure_submit:
+		ensure_target_doctypes_submitable()
+
 	if not frappe.db.exists("DocType", FHIR_FIELD_DOCTYPE):
 		return
 
@@ -24,7 +46,7 @@ def ensure_khanza_custom_fields():
 		},
 		{
 			"fieldname": "khanza_queue",
-			"label": "Source Queue",
+			"label": "Source Sync Record",
 			"fieldtype": "Link",
 			"options": QUEUE_DOCTYPE,
 			"read_only": 1,
@@ -97,12 +119,80 @@ def ensure_khanza_custom_fields():
 			"insert_after": "khanza_fhir_fields",
 		},
 	]
-	create_custom_fields(
+	fields_by_doctype = {}
+	for doctype in CUSTOM_FIELD_TARGET_DOCTYPES:
+		if not frappe.db.exists("DocType", doctype):
+			continue
+		missing_fields = [
+			field for field in common_fields
+			if not _doctype_has_field(doctype, field["fieldname"])
+		]
+		if missing_fields:
+			fields_by_doctype[doctype] = missing_fields
+
+	if fields_by_doctype:
+		create_custom_fields(fields_by_doctype)
+	if sync_existing:
+		sync_all_queue_target_docstatus()
+
+def ensure_target_doctypes_submitable():
+	for role in TARGET_SUBMIT_ROLES:
+		_ensure_role(role)
+
+	for doctype in CUSTOM_FIELD_TARGET_DOCTYPES:
+		if not frappe.db.exists("DocType", doctype):
+			continue
+
+		frappe.db.set_value("DocType", doctype, "is_submittable", 1, update_modified=False)
+		for role in TARGET_SUBMIT_ROLES:
+			_ensure_submit_permission(doctype, role)
+		frappe.clear_cache(doctype=doctype)
+
+	frappe.clear_cache()
+
+def _ensure_role(role):
+	if frappe.db.exists("Role", role):
+		return
+
+	frappe.get_doc(
 		{
-			doctype: common_fields
-			for doctype in CUSTOM_FIELD_TARGET_DOCTYPES
-			if frappe.db.exists("DocType", doctype)
+			"doctype": "Role",
+			"role_name": role,
+			"desk_access": 1,
 		}
+	).insert(ignore_permissions=True)
+
+def _ensure_submit_permission(doctype, role):
+	perm_name = frappe.db.exists(
+		"DocPerm",
+		{
+			"parent": doctype,
+			"parenttype": "DocType",
+			"parentfield": "permissions",
+			"role": role,
+			"permlevel": 0,
+		},
+	)
+
+	if perm_name:
+		frappe.db.set_value(
+			"DocPerm",
+			perm_name,
+			TARGET_SUBMIT_PERMISSIONS,
+			update_modified=False,
+		)
+		return
+
+	doc = frappe.get_doc("DocType", doctype)
+	doc.is_submittable = 1
+	doc.append("permissions", {"role": role, "permlevel": 0, **TARGET_SUBMIT_PERMISSIONS})
+	doc.flags.ignore_permissions = True
+	doc.save(ignore_permissions=True)
+
+def _doctype_has_field(doctype, fieldname):
+	return bool(
+		frappe.db.exists("DocField", {"parent": doctype, "fieldname": fieldname})
+		or frappe.db.exists("Custom Field", {"dt": doctype, "fieldname": fieldname})
 	)
 
 def _text(value):
@@ -209,9 +299,16 @@ def _target_for_fhir(fhir):
 			coding = _first(category.get("coding"))
 			category_code = (coding.get("code") or "").lower()
 			if category_code == "vital-signs":
-				return "Vital Signs"
-		return "Observation"
-	return RESOURCE_TARGETS.get(resource_type, "Clinical Note")
+				target = "Vital Signs"
+				break
+		else:
+			target = "Observation"
+	else:
+		target = RESOURCE_TARGETS.get(resource_type, "Clinical Note")
+
+	if not frappe.db.exists("DocType", target):
+		return "Clinical Note"
+	return target
 
 def _function_for_fhir(fhir):
 	resource_type = fhir.get("resourceType")
@@ -270,6 +367,7 @@ def _set_if_field(doc, fieldname, value):
 	if value in (None, "") or not doc.meta.has_field(fieldname):
 		return
 	field = doc.meta.get_field(fieldname)
+	value = _coerce_for_field(field, value)
 	if field.fieldtype == "Link" and field.options and not frappe.db.exists(field.options, value):
 		return
 	if field.fieldtype == "Select" and field.options:
@@ -277,6 +375,23 @@ def _set_if_field(doc, fieldname, value):
 		if options and value not in options:
 			return
 	doc.set(fieldname, value)
+
+def _coerce_for_field(field, value):
+	if value in (None, ""):
+		return value
+	if not isinstance(value, str):
+		return value
+
+	value = value.strip()
+	if field.fieldtype == "Datetime" and "T" in value and len(value) >= 19:
+		return value[:19].replace("T", " ")
+	if field.fieldtype == "Date":
+		return value[:10]
+	if field.fieldtype == "Time":
+		if "T" in value:
+			return value.split("T", 1)[1][:8]
+		return value[:8]
+	return value
 
 def _append_fhir_audit_fields(doc, fhir, queue_doc, external_id, khanza_function):
 	for row in _flatten_fhir(fhir):
@@ -349,6 +464,257 @@ def _quantity_value(fhir):
 def _quantity_unit(fhir):
 	quantity = fhir.get("valueQuantity") or {}
 	return quantity.get("unit") or quantity.get("code")
+
+def _ensure_medication_class(value):
+	value = _text(value).strip() or "Tablet"
+	if not frappe.db.exists("Medication Class", value):
+		doc = frappe.new_doc("Medication Class")
+		doc.medication_class = value
+		doc.insert(ignore_permissions=True)
+	return value
+
+def _ensure_uom(value):
+	value = _text(value).strip() or "mg"
+	if frappe.db.exists("UOM", value):
+		return value
+
+	try:
+		doc = frappe.new_doc("UOM")
+		doc.uom_name = value
+		doc.insert(ignore_permissions=True)
+		return doc.name
+	except Exception:
+		fallback = (
+			frappe.db.exists("UOM", "mg")
+			or frappe.db.exists("UOM", "Nos")
+			or frappe.db.get_single_value("Stock Settings", "stock_uom")
+		)
+		return fallback or value
+
+def _medication_form_text(fhir):
+	return _coding_text(fhir.get("form")) or "Tablet"
+
+def _medication_strength(fhir):
+	search_text = " ".join(
+		[
+			_coding_text(fhir.get("code")),
+			_coding_code(fhir.get("code")),
+			_text(fhir.get("id")),
+		]
+	)
+	match = re.search(
+		r"(?i)(\d+(?:[\.,]\d+)?)\s*(mcg|microgram|mg|g|gram|ml|mL|l|iu|unit|units)\b",
+		search_text,
+	)
+	if not match:
+		return 1, "mg"
+
+	value = float(match.group(1).replace(",", "."))
+	unit = match.group(2)
+	unit_map = {
+		"microgram": "mcg",
+		"gram": "g",
+		"ml": "mL",
+		"unit": "Unit",
+		"units": "Unit",
+	}
+	return value, unit_map.get(unit.lower(), unit)
+
+def _clean_link_name(value, fallback):
+	value = re.sub(r"\s+", " ", _text(value)).strip()
+	value = re.sub(r"[\\/#?%:;]+", "-", value)
+	return (value or fallback)[:140]
+
+def _insert_minimal_doc(doctype, values):
+	doc = frappe.new_doc(doctype)
+	for key, value in values.items():
+		if doc.meta.has_field(key) and value not in (None, ""):
+			doc.set(key, value)
+	doc.flags.ignore_mandatory = True
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+def _ensure_code_system(name, uri=None):
+	name = _clean_link_name(name, "Khanza Code System")
+	if frappe.db.exists("Code System", name):
+		return name
+
+	doc = frappe.new_doc("Code System")
+	doc.code_system = name
+	doc.uri = uri or f"http://terminology.khanza.local/CodeSystem/{name.lower().replace(' ', '-')}"
+	if doc.meta.has_field("experimental"):
+		doc.experimental = 0
+	if doc.meta.has_field("custom"):
+		doc.custom = 1
+	doc.flags.ignore_mandatory = True
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+def _ensure_code_value(code, system, display=None):
+	code = _clean_link_name(code, "unknown")
+	system = _ensure_code_system(system)
+	existing = frappe.db.exists("Code Value", {"code_system": system, "code_value": code})
+	if existing:
+		return existing
+
+	doc = frappe.new_doc("Code Value")
+	doc.code_system = system
+	doc.code_value = code
+	doc.display = (display or code)[:140]
+	if doc.meta.has_field("experimental"):
+		doc.experimental = 0
+	if doc.meta.has_field("custom"):
+		doc.custom = 1
+	doc.flags.ignore_mandatory = True
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+def _ensure_dosage_form(value):
+	value = _clean_link_name(value, "Tablet")
+	if frappe.db.exists("Dosage Form", value):
+		return value
+	return _insert_minimal_doc("Dosage Form", {"dosage_form": value})
+
+def _ensure_prescription_dosage(value):
+	value = _clean_link_name(value, "Sesuai resep")
+	if frappe.db.exists("Prescription Dosage", value):
+		return value
+	return _insert_minimal_doc("Prescription Dosage", {"dosage": value})
+
+def _default_stock_uom():
+	return (
+		frappe.db.exists("UOM", "Nos")
+		or frappe.db.exists("UOM", "Unit")
+		or frappe.db.get_single_value("Stock Settings", "stock_uom")
+		or _ensure_uom("Nos")
+	)
+
+def _default_item_group():
+	return (
+		frappe.db.exists("Item Group", "All Item Groups")
+		or frappe.db.get_value("Item Group", {}, "name")
+	)
+
+def _ensure_item(value):
+	item_name = _clean_link_name(value, "Khanza Medication Item")
+	if frappe.db.exists("Item", item_name):
+		return item_name
+
+	doc = frappe.new_doc("Item")
+	doc.item_code = item_name
+	doc.item_name = item_name
+	doc.item_group = _default_item_group()
+	doc.stock_uom = _default_stock_uom()
+	if doc.meta.has_field("is_stock_item"):
+		doc.is_stock_item = 0
+	if doc.meta.has_field("disabled"):
+		doc.disabled = 0
+	doc.flags.ignore_mandatory = True
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+def _medication_reference(fhir):
+	reference = fhir.get("medicationReference")
+	if isinstance(reference, dict):
+		return reference
+	return _find_reference(fhir, "Medication")
+
+def _medication_display(fhir):
+	reference = _medication_reference(fhir)
+	if reference.get("display"):
+		return reference.get("display")
+	return (
+		_coding_text(fhir.get("medicationCodeableConcept"))
+		or _coding_text(fhir.get("code"))
+		or _coding_code(fhir.get("medicationCodeableConcept"))
+		or _coding_code(fhir.get("code"))
+		or _text(fhir.get("id"))
+		or "Khanza Medication"
+	)
+
+def _medication_docname_from_reference(fhir):
+	reference = _medication_reference(fhir)
+	local_id = _reference_id(reference.get("reference"))
+	if local_id:
+		existing = (
+			frappe.db.exists("Medication", {"satusehat_resource_id": local_id})
+			or frappe.db.exists("Medication", {"khanza_external_id": local_id})
+			or frappe.db.exists("Medication", local_id)
+		)
+		if existing:
+			return existing
+
+	display = _medication_display(fhir)
+	if display:
+		return frappe.db.exists("Medication", {"generic_name": display})
+	return None
+
+def _medication_form_from_text(value):
+	value = _text(value).lower()
+	if "capsule" in value or "kapsul" in value:
+		return "Capsule"
+	if "syrup" in value or "sirup" in value:
+		return "Syrup"
+	if "injection" in value or "inj" in value:
+		return "Injection"
+	if "ointment" in value or "salep" in value:
+		return "Ointment"
+	return "Tablet"
+
+def _dosage_text(fhir):
+	instruction = _first(fhir.get("dosageInstruction") or fhir.get("dosage") or [])
+	if isinstance(instruction, dict):
+		if instruction.get("text"):
+			return instruction.get("text")
+		timing = instruction.get("timing") or {}
+		repeat = timing.get("repeat") or {}
+		frequency = repeat.get("frequency")
+		period = repeat.get("period")
+		dose = _first(instruction.get("doseAndRate") or {}).get("doseQuantity") or {}
+		dose_text = " ".join([_text(dose.get("value")), _text(dose.get("unit") or dose.get("code"))]).strip()
+		if frequency and dose_text:
+			return f"{frequency} x {dose_text}"
+		if frequency and period:
+			return f"{frequency} x per {period} hari"
+	return "Sesuai resep"
+
+def _medication_quantity(fhir):
+	quantity = ((fhir.get("dispenseRequest") or {}).get("quantity") or {}).get("value")
+	if quantity not in (None, ""):
+		return quantity
+	dose = _first(_first(fhir.get("dosageInstruction") or []).get("doseAndRate") or {}).get("doseQuantity") or {}
+	return dose.get("value") or 1
+
+def _apply_medication_request_fields(target, fhir):
+	medication_name = _medication_display(fhir)
+	medication_doc = _medication_docname_from_reference(fhir)
+	dosage_form = _medication_form_from_text(medication_name)
+	when = _effective_datetime(fhir)
+	quantity = _medication_quantity(fhir)
+
+	_set_if_field(target, "naming_series", "HMR-")
+	_set_if_field(target, "title", medication_name)
+	_set_if_field(target, "status", _ensure_code_value(fhir.get("status") or "active", "Medication Request Status"))
+	_set_if_field(target, "intent", _ensure_code_value(fhir.get("intent") or "order", "Request Intent"))
+	_set_if_field(target, "priority", _ensure_code_value(fhir.get("priority") or "routine", "Request Priority"))
+	_set_if_field(target, "medication", medication_doc)
+	_set_if_field(target, "medication_item", _ensure_item(medication_name))
+	_set_if_field(target, "dosage_form", _ensure_dosage_form(dosage_form))
+	_set_if_field(target, "dosage", _ensure_prescription_dosage(_dosage_text(fhir)))
+	_set_if_field(target, "quantity", quantity)
+	_set_if_field(target, "total_dispensable_quantity", quantity)
+	_set_if_field(target, "number_of_repeats_allowed", 0)
+	_set_if_field(target, "order_description", medication_name)
+	_set_if_field(target, "order_date", _date_part(when) or frappe.utils.nowdate())
+	_set_if_field(target, "expected_date", _date_part(when) or frappe.utils.nowdate())
+	_set_if_field(target, "order_time", _time_part(when) or "00:00:00")
+
+def _apply_medication_child_fields(target, fhir):
+	medication_name = _medication_display(fhir)
+	_set_if_field(target, "code", _reference_id((_medication_reference(fhir) or {}).get("reference")) or medication_name)
+	_set_if_field(target, "code_display", medication_name)
+	_set_if_field(target, "status", fhir.get("status") or "unknown")
+	_set_if_field(target, "note", _json_dumps(fhir.get("note")) if fhir.get("note") else medication_name)
 
 def _fill_common_target_fields(target, fhir, queue_doc, external_id, khanza_function):
 	patient = _ensure_patient(_patient_reference(fhir))
@@ -426,8 +792,11 @@ def _apply_resource_specific_fields(target, fhir, target_doctype):
 		target.vital_signs_note = _coding_text(fhir.get("code"))
 
 	if target_doctype == "Observation":
+		template = _ensure_observation_template(fhir)
+		_set_if_field(target, "observation_template", template)
 		target.observation_category = _observation_category(fhir)
-		target.result_data = _observation_result(fhir)
+		target.result_data = ""
+		target.result_text = _observation_result(fhir)
 		target.preferred_display_name = _coding_text(fhir.get("code"))
 		target.description = target.description or _coding_text(fhir.get("code"))
 
@@ -437,6 +806,28 @@ def _apply_resource_specific_fields(target, fhir, target_doctype):
 	if target_doctype == "Medication":
 		target.generic_name = _coding_text(fhir.get("code")) or target.khanza_external_id
 		target.national_drug_code = _coding_code(fhir.get("code"))
+		strength, strength_uom = _medication_strength(fhir)
+		target.medication_class = _ensure_medication_class(_medication_form_text(fhir))
+		target.strength = strength
+		target.strength_uom = _ensure_uom(strength_uom)
+		target.disabled = 1 if fhir.get("status") == "inactive" else 0
+
+	if target_doctype == "Medication Request":
+		_apply_medication_request_fields(target, fhir)
+
+	if target_doctype in ("Medication Dispense", "Medication Statement"):
+		_apply_medication_child_fields(target, fhir)
+
+	if target_doctype == "Service Request":
+		template_dt, template_dn = _ensure_service_request_template(fhir)
+		_set_if_field(target, "template_dt", template_dt)
+		_set_if_field(target, "template_dn", template_dn)
+		_set_if_field(target, "source", "Direct")
+		_set_if_field(target, "quantity", 1)
+		when = _effective_datetime(fhir)
+		_set_if_field(target, "occurrence_date", _date_part(when))
+		_set_if_field(target, "occurrence_time", _time_part(when))
+		_set_if_field(target, "expected_date", _date_part(when))
 
 	if target_doctype == "Clinical Note":
 		target.note = target.note or _json_dumps(fhir)
@@ -445,7 +836,68 @@ def _apply_resource_specific_fields(target, fhir, target_doctype):
 		target.questionnaire = fhir.get("questionnaire") or target.khanza_external_id
 		target.note = target.note or _json_dumps(fhir.get("item") or [])
 
+	if target_doctype == "Patient Assessment":
+		template = _ensure_patient_assessment_template()
+		_set_if_field(target, "assessment_template", template)
+		_set_if_field(target, "assessment_description", _json_dumps(fhir.get("summary") or fhir.get("finding") or fhir))
+		if target.meta.has_field("assessment_sheet") and not target.get("assessment_sheet"):
+			parameter = _ensure_patient_assessment_parameter("Clinical Impression")
+			target.append(
+				"assessment_sheet",
+				{
+					"parameter": parameter,
+					"score": "0",
+					"comments": _coding_text(fhir.get("code")) or _text(fhir.get("description")),
+				},
+			)
+
 	return target
+
+def _ensure_service_request_template(fhir):
+	template = _ensure_observation_template(fhir)
+	return "Observation Template", template
+
+def _ensure_observation_template(fhir):
+	name = _coding_text(fhir.get("code")) or _coding_code(fhir.get("code")) or "Khanza Observation"
+	name = name[:140]
+	if frappe.db.exists("Observation Template", name):
+		return name
+
+	doc = frappe.new_doc("Observation Template")
+	doc.observation = name
+	doc.observation_category = _observation_category(fhir)
+	doc.preferred_display_name = name
+	doc.description = name
+	doc.permitted_data_type = "Text"
+	doc.flags.ignore_mandatory = True
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+def _ensure_patient_assessment_parameter(name):
+	name = (name or "Clinical Impression")[:140]
+	if frappe.db.exists("Patient Assessment Parameter", name):
+		return name
+	doc = frappe.new_doc("Patient Assessment Parameter")
+	doc.assessment_parameter = name
+	doc.flags.ignore_mandatory = True
+	doc.insert(ignore_permissions=True)
+	return doc.name
+
+def _ensure_patient_assessment_template():
+	name = "Clinical Impression"
+	if frappe.db.exists("Patient Assessment Template", name):
+		return name
+
+	parameter = _ensure_patient_assessment_parameter(name)
+	doc = frappe.new_doc("Patient Assessment Template")
+	doc.assessment_name = name
+	doc.scale_min = 0
+	doc.scale_max = 10
+	doc.assessment_description = "Clinical impression imported from FHIR"
+	doc.append("parameters", {"assessment_parameter": parameter})
+	doc.flags.ignore_mandatory = True
+	doc.insert(ignore_permissions=True)
+	return doc.name
 
 def _observation_category(fhir):
 	for category in fhir.get("category") or []:
@@ -472,16 +924,44 @@ def _new_target_doc(target_doctype, fhir, queue_doc, external_id, khanza_functio
 	existing = frappe.db.exists(target_doctype, {"khanza_external_id": external_id})
 	if existing:
 		target = frappe.get_doc(target_doctype, existing)
+		if int(getattr(target, "docstatus", 0) or 0) == 1:
+			target.flags.ignore_validate_update_after_submit = True
 		target.set("khanza_fhir_fields", [])
+	elif target_doctype == "Diagnosis":
+		diagnosis = _coding_text(fhir.get("code")) or _coding_code(fhir.get("code")) or external_id
+		existing_diagnosis = frappe.db.exists("Diagnosis", {"diagnosis": diagnosis})
+		if existing_diagnosis:
+			target = frappe.get_doc("Diagnosis", existing_diagnosis)
+			if int(getattr(target, "docstatus", 0) or 0) == 1:
+				target.flags.ignore_validate_update_after_submit = True
+			if target.meta.has_field("khanza_fhir_fields"):
+				target.set("khanza_fhir_fields", [])
+		else:
+			target = frappe.new_doc(target_doctype)
+	elif target_doctype == "Medication":
+		existing_medication = None
+		if fhir.get("id"):
+			existing_medication = frappe.db.exists("Medication", {"satusehat_resource_id": fhir.get("id")})
+
+		if existing_medication:
+			target = frappe.get_doc("Medication", existing_medication)
+			if int(getattr(target, "docstatus", 0) or 0) == 1:
+				target.flags.ignore_validate_update_after_submit = True
+			if target.meta.has_field("khanza_fhir_fields"):
+				target.set("khanza_fhir_fields", [])
+		else:
+			target = frappe.new_doc(target_doctype)
 	else:
 		target = frappe.new_doc(target_doctype)
 	target = _fill_common_target_fields(target, fhir, queue_doc, external_id, khanza_function)
 	target = _apply_resource_specific_fields(target, fhir, target_doctype)
 	target.flags.ignore_mandatory = True
+	if int(getattr(target, "docstatus", 0) or 0) == 1:
+		target.flags.ignore_validate_update_after_submit = True
 	return target
 
 def import_fhir_to_healthcare_doc(queue_doc, fhir, external_id):
-	ensure_khanza_custom_fields()
+	ensure_khanza_custom_fields(sync_existing=False, ensure_submit=False)
 	if not frappe.db.exists("DocType", FHIR_FIELD_DOCTYPE):
 		frappe.throw(_("Run bench migrate first so Khanza SatuSehat DocTypes are installed"))
 	known_resource_id = getattr(queue_doc, "satusehat_resource_id", None)
@@ -492,4 +972,5 @@ def import_fhir_to_healthcare_doc(queue_doc, fhir, external_id):
 	khanza_function = _function_for_fhir(fhir)
 	target = _new_target_doc(target_doctype, fhir, queue_doc, external_id, khanza_function)
 	target.save(ignore_permissions=True)
+	sync_queue_target_docstatus(target)
 	return target

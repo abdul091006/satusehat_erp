@@ -1,12 +1,12 @@
 import json
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import frappe
 import requests
 from frappe import _
 
-from .constants import TOKEN_EXPIRY_SAFETY_SECONDS
+from .constants import SATUSEHAT_HTTP_TIMEOUT_SECONDS, TOKEN_EXPIRY_SAFETY_SECONDS
 
 _cached_satusehat_token = None
 _cached_satusehat_token_expired_at = 0
@@ -70,7 +70,7 @@ def _get_satusehat_token():
 			"Content-Type": "application/x-www-form-urlencoded",
 			"Accept": "application/json",
 		},
-		timeout=30,
+		timeout=SATUSEHAT_HTTP_TIMEOUT_SECONDS,
 	)
 	response_text = response.text or ""
 	if not response.ok:
@@ -101,10 +101,10 @@ def _satusehat_headers():
 	}
 
 def _endpoint_for(doc, fhir):
-	if doc.endpoint_path:
-		path = doc.endpoint_path
-	elif doc.method == "PUT" and fhir.get("id"):
+	if doc.method == "PUT" and fhir.get("id"):
 		path = f"/{doc.resource_type}/{fhir.get('id')}"
+	elif doc.method == "POST" and doc.endpoint_path:
+		path = doc.endpoint_path
 	else:
 		path = f"/{doc.resource_type}"
 	return f"{_satusehat_base_url()}/{path.lstrip('/')}"
@@ -124,18 +124,110 @@ def _identifier_search_url(resource_type, fhir):
 	identifier_value = quote(f"{system}|{value}", safe="")
 	return f"{_satusehat_base_url()}/{resource_type}?identifier={identifier_value}"
 
+def _reference_search_value(value):
+	if isinstance(value, dict):
+		reference = value.get("reference")
+	else:
+		reference = value
+	if isinstance(reference, str) and "/" in reference:
+		return reference
+	return None
+
+def _coding_search_value(codeable):
+	if not isinstance(codeable, dict):
+		return None
+	coding = codeable.get("coding") or []
+	if not coding:
+		return None
+	first = coding[0] or {}
+	system = first.get("system")
+	code = first.get("code")
+	if system and code:
+		return f"{system}|{code}"
+	return code
+
+def _business_search_url(resource_type, fhir):
+	params = {}
+
+	if resource_type in (
+		"Observation",
+		"Condition",
+		"Procedure",
+		"DiagnosticReport",
+		"ServiceRequest",
+		"MedicationRequest",
+		"MedicationDispense",
+		"MedicationStatement",
+		"ClinicalImpression",
+		"QuestionnaireResponse",
+		"AllergyIntolerance",
+		"Immunization",
+		"CarePlan",
+		"Composition",
+		"Medication",
+	):
+		subject = _reference_search_value(fhir.get("subject") or fhir.get("patient"))
+		encounter = _reference_search_value(fhir.get("encounter"))
+		code = _coding_search_value(
+			fhir.get("code")
+			or fhir.get("vaccineCode")
+			or fhir.get("medicationCodeableConcept")
+		)
+		if subject:
+			params["subject"] = subject
+		if encounter:
+			params["encounter"] = encounter
+		if code:
+			params["code"] = code
+
+	if not params:
+		return None
+
+	return f"{_satusehat_base_url()}/{resource_type}?{urlencode(params)}"
+
 def _find_existing_satusehat_resource(resource_type, fhir):
-	search_url = _identifier_search_url(resource_type, fhir)
+	search_urls = [
+		url for url in (
+			_identifier_search_url(resource_type, fhir),
+			_business_search_url(resource_type, fhir),
+		)
+		if url
+	]
+	if not search_urls:
+		return None
+
+	last_error = None
+	successful_lookup = False
+	for search_url in search_urls:
+		found = _find_existing_satusehat_resource_at_url(resource_type, search_url)
+		if isinstance(found, Exception):
+			last_error = found
+			continue
+		successful_lookup = True
+		if found:
+			return found
+
+	if last_error and not successful_lookup:
+		if "Invalid query" in str(last_error):
+			return None
+		raise last_error
+	return None
+
+def _find_existing_satusehat_resource_at_url(resource_type, search_url):
 	if not search_url:
 		return None
 
 	response = requests.get(
 		search_url,
 		headers=_satusehat_headers(),
-		timeout=30,
+		timeout=SATUSEHAT_HTTP_TIMEOUT_SECONDS,
 	)
 	response_text = response.text or ""
 	if not response.ok:
+		if response.status_code == 400 and "Invalid query" in response_text:
+			return frappe.ValidationError(
+				f"Preflight duplicate check HTTP {response.status_code}: {response_text}"
+			)
 		raise frappe.ValidationError(f"Preflight duplicate check HTTP {response.status_code}: {response_text}")
 
 	try:
@@ -170,7 +262,7 @@ def _is_duplicate_response(response_text):
 	try:
 		payload = json.loads(response_text or "{}")
 	except Exception:
-		return "Found duplicate resource" in (response_text or "")
+		return "Found duplicate" in (response_text or "")
 
 	issues = []
 	if isinstance(payload, list):
@@ -187,7 +279,7 @@ def _is_duplicate_response(response_text):
 				or issue.get("diagnostics")
 				or ""
 			)
-		if "Found duplicate resource" in message:
+		if "Found duplicate" in message:
 			return True
 
 	return False

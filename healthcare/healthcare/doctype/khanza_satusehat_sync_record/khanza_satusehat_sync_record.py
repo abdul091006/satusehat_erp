@@ -3,7 +3,7 @@ from frappe.model.document import Document
 from frappe.utils import now_datetime
 
 
-class KhanzaSatuSehatQueue(Document):
+class KhanzaSatuSehatSyncRecord(Document):
 	def before_insert(self):
 		self.source_system = self.source_system or "khanza"
 		self.import_status = self.import_status or "pending"

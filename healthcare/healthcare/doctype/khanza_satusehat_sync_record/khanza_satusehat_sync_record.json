@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 0,
- "autoname": "format:KSSQ-{YYYY}-{#####}",
+ "autoname": "format:KSSR-{YYYY}-{#####}",
  "creation": "2026-06-04 00:00:00.000000",
  "doctype": "DocType",
  "document_type": "Document",
@@ -19,6 +19,7 @@
   "imported_at",
   "target_doctype",
   "target_docname",
+  "target_docstatus",
   "approval_section",
   "approval_status",
   "approved_by",
@@ -91,7 +92,6 @@
    "default": "pending",
    "fieldname": "import_status",
    "fieldtype": "Select",
-   "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Import Status",
    "options": "pending\nprocessing\nimported\nfailed\nfailed_permanent",
@@ -115,6 +115,16 @@
    "fieldtype": "Dynamic Link",
    "label": "Target Document",
    "options": "target_doctype",
+   "read_only": 1
+  },
+  {
+   "default": "Draft",
+   "fieldname": "target_docstatus",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "ERPNext Document Status",
+   "options": "Draft\nSubmitted\nCancelled",
    "read_only": 1
   },
   {
@@ -162,7 +172,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "SatuSehat Status",
-   "options": "pending\nprocessing\nsent\nfailed\nfailed_permanent",
+   "options": "pending\nwaiting\nprocessing\nsent\nfailed\nfailed_permanent",
    "read_only": 1,
    "reqd": 1
   },
@@ -230,7 +240,7 @@
  "modified": "2026-06-04 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Healthcare",
- "name": "Khanza SatuSehat Queue",
+ "name": "Khanza SatuSehat Sync Record",
  "owner": "Administrator",
  "permissions": [
   {

@@ -6,6 +6,11 @@ from pathlib import Path
 from datetime import datetime, date
 from decimal import Decimal
 
+try:
+    from healthcare.healthcare.khanza_satusehat.constants import TARGET_DOCTYPES as KHANZA_TARGET_DOCTYPES
+except Exception:
+    KHANZA_TARGET_DOCTYPES = ()
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -19,31 +24,53 @@ SYNC_STATE_PATH = FHIR_EXPORT_PATH / "_sync_state"
 
 DEFAULT_LAST_SYNC = "2000-01-01 00:00:00.000000"
 
-# FHIR resource type mapping: Frappe DocType -> FHIR resourceType (no spaces)
-FHIR_RESOURCE_TYPE_MAP = {
-    doctype: doctype.replace(" ", "")
-    for doctype in [
-        "Patient",
-        "Medication",
-        "Medication Linked Item",
-        "Healthcare Practitioner",
-        "Patient Encounter",
-        "Healthcare Service Unit Type",
-        "Healthcare Service Unit",
-        "Clinical Procedure Template",
-        "Inpatient Medication Entry",
-        "Therapy Plan",
-        "Lab Test Template",
-        "Patient Appointment",
-        "Therapy Plan Template",
-        "Appointment Type",
-        "Therapy Session",
-        "Lab Test",
-        "Diagnostic Report",
-        "Observation Reference Range",
-        "Observation Template",
-    ]
+# FHIR resource type mapping: Frappe DocType -> FHIR resourceType.
+BASE_TARGET_DOCTYPES = [
+    "Patient",
+    "Medication",
+    "Medication Linked Item",
+    "Healthcare Practitioner",
+    "Patient Encounter",
+    "Healthcare Service Unit Type",
+    "Healthcare Service Unit",
+    "Clinical Procedure Template",
+    "Inpatient Medication Entry",
+    "Therapy Plan",
+    "Lab Test Template",
+    "Patient Appointment",
+    "Therapy Plan Template",
+    "Appointment Type",
+    "Therapy Session",
+    "Lab Test",
+    "Diagnostic Report",
+    "Observation Reference Range",
+    "Observation Template",
+]
+
+FHIR_RESOURCE_TYPE_OVERRIDES = {
+    "Allergy": "AllergyIntolerance",
+    "Clinical Note": "Composition",
+    "Clinical Procedure": "Procedure",
+    "Diagnosis": "Condition",
+    "Diagnostic Report": "DiagnosticReport",
+    "Healthcare Practitioner": "Practitioner",
+    "Medication Dispense": "MedicationDispense",
+    "Medication Request": "MedicationRequest",
+    "Medication Statement": "MedicationStatement",
+    "Patient Assessment": "ClinicalImpression",
+    "Patient Encounter": "Encounter",
+    "Questionnaire Response": "QuestionnaireResponse",
+    "Service Request": "ServiceRequest",
+    "Therapy Plan": "CarePlan",
+    "Vital Signs": "Observation",
 }
+
+FHIR_RESOURCE_TYPE_MAP = {}
+for doctype in list(dict.fromkeys(BASE_TARGET_DOCTYPES + list(KHANZA_TARGET_DOCTYPES))):
+    FHIR_RESOURCE_TYPE_MAP[doctype] = FHIR_RESOURCE_TYPE_OVERRIDES.get(
+        doctype,
+        doctype.replace(" ", ""),
+    )
 
 TARGET_DOCTYPES = list(FHIR_RESOURCE_TYPE_MAP.keys())
 

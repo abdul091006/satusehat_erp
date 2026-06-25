@@ -95,6 +95,7 @@
   }
  ],
  "index_web_pages_for_search": 1,
+ "is_submittable": 1,
  "links": [],
  "modified": "2023-07-20 18:18:46.964110",
  "modified_by": "Administrator",
@@ -113,6 +114,28 @@
    "report": 1,
    "role": "System Manager",
    "share": 1,
+   "write": 1,
+   "permlevel": 0,
+   "select": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1
+  },
+  {
+   "role": "Healthcare Administrator",
+   "permlevel": 0,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "select": 1,
+   "share": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
    "write": 1
   }
  ],

@@ -108,7 +108,7 @@
    "label": "Vital Signs"
   },
   {
-   "description": "Presence of a fever (temp &gt; 38.5 \u00b0C/101.3 \u00b0F or sustained temp &gt; 38 \u00b0C/100.4 \u00b0F)",
+   "description": "Presence of a fever (temp &gt; 38.5 °C/101.3 °F or sustained temp &gt; 38 °C/100.4 °F)",
    "fieldname": "temperature",
    "fieldtype": "Data",
    "ignore_xss_filter": 1,
@@ -124,7 +124,7 @@
    "label": "Heart Rate / Pulse"
   },
   {
-   "description": "Normal reference range for an adult is 16\u201320 breaths/minute (RCP 2012)",
+   "description": "Normal reference range for an adult is 16–20 breaths/minute (RCP 2012)",
    "fieldname": "respiratory_rate",
    "fieldtype": "Data",
    "ignore_xss_filter": 1,
@@ -289,6 +289,40 @@
    "role": "Nursing User",
    "share": 1,
    "submit": 1,
+   "write": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "select": 1,
+   "share": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
+   "write": 1
+  },
+  {
+   "role": "Healthcare Administrator",
+   "permlevel": 0,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "select": 1,
+   "share": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1,
    "write": 1
   }
  ],

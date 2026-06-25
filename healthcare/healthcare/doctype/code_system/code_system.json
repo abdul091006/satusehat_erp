@@ -2,7 +2,7 @@
  "actions": [],
  "allow_import": 1,
  "autoname": "field:code_system",
- "beta": 1,
+ "beta": 0,
  "creation": "2017-06-21 13:07:00.463176",
  "doctype": "DocType",
  "editable_grid": 1,
@@ -84,9 +84,10 @@
    "no_copy": 1
   },
   {
-   "default": "1",
+   "default": "0",
    "fieldname": "experimental",
    "fieldtype": "Check",
+   "hidden": 1,
    "label": "Experimental ",
    "read_only": 1
   },

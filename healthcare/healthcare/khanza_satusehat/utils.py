@@ -52,6 +52,9 @@ def _queue_response(doc, message):
 		"import_status": getattr(doc, "import_status", None),
 		"approval_status": doc.approval_status,
 		"sync_status": doc.sync_status,
+		"target_docstatus": getattr(doc, "target_docstatus", None),
+		"target_doctype": getattr(doc, "target_doctype", None),
+		"target_docname": getattr(doc, "target_docname", None),
 		"attempts": doc.attempts,
 	}
 
@@ -87,12 +90,12 @@ def _get_retry_delay(attempts):
 	if attempts == 2:
 		return timedelta(minutes=5)
 	if attempts == 3:
-		return timedelta(minutes=15)
+		return timedelta(minutes=10)
 	if attempts == 4:
-		return timedelta(hours=1)
+		return timedelta(minutes=15)
 	if attempts == 5:
-		return timedelta(hours=6)
-	return timedelta(hours=24)
+		return timedelta(minutes=15)
+	return timedelta(minutes=30)
 
 def _should_retry(last_attempt_at, attempts):
 	if not last_attempt_at:
@@ -109,5 +112,5 @@ def _get_queue_name(external_id=None, queue_name=None):
 
 	doc_name = frappe.db.exists(QUEUE_DOCTYPE, {"external_id": external_id})
 	if not doc_name:
-		frappe.throw(_("Queue item not found"))
+		frappe.throw(_("Sync record not found"))
 	return doc_name

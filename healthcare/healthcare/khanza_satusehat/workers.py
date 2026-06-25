@@ -1,3 +1,9 @@
+import copy
+import hashlib
+import re
+import time
+import uuid
+
 import frappe
 import requests
 from frappe import _
@@ -11,7 +17,12 @@ from .constants import (
     LOG_DOCTYPE,
     MAX_ATTEMPTS,
     QUEUE_DOCTYPE,
+    SATUSEHAT_HTTP_TIMEOUT_SECONDS,
+    SEND_BATCH_LIMIT,
+    SEND_TIME_BUDGET_SECONDS,
+    SYNC_STATUS_WAITING,
 )
+from .document_events import target_docstatus_label
 from .healthcare_import import import_fhir_to_healthcare_doc
 from .logs import _append_log, _safe_append_success_ndjson
 from .persistence import _safe_store_satusehat_resource_id
@@ -26,10 +37,614 @@ from .satusehat_client import (
 )
 from .utils import _as_dict, _json_dumps, _now, _parse_names, _should_retry
 
+RESOURCE_SEND_ORDER = {
+    "Encounter": 10,
+    "Medication": 20,
+    "Condition": 30,
+    "Procedure": 40,
+    "ClinicalImpression": 50,
+    "Composition": 55,
+    "ServiceRequest": 60,
+    "Specimen": 70,
+    "Observation": 80,
+    "DiagnosticReport": 90,
+    "MedicationRequest": 100,
+    "MedicationDispense": 110,
+    "MedicationStatement": 120,
+    "CarePlan": 130,
+    "QuestionnaireResponse": 140,
+    "AllergyIntolerance": 150,
+    "Immunization": 160,
+}
+
+SYNC_STATUS_ORDER = {
+    "sent": 0,
+    "processing": 1,
+    "pending": 2,
+    SYNC_STATUS_WAITING: 3,
+    "failed": 4,
+    "failed_permanent": 5,
+}
+
+
+def _resource_sort_key(doc):
+    resource_order = RESOURCE_SEND_ORDER.get(doc.resource_type, 999)
+    if doc.resource_type == "Encounter" and (doc.method or "").upper() == "PUT":
+        resource_order = 900
+
+    return (
+        resource_order,
+        doc.creation,
+        doc.name,
+    )
+
+REFERENCE_RESOURCE_TYPES = {
+    "Encounter",
+    "Condition",
+    "Observation",
+    "Procedure",
+    "ServiceRequest",
+    "Specimen",
+    "Medication",
+    "MedicationRequest",
+    "MedicationDispense",
+    "MedicationStatement",
+    "DiagnosticReport",
+    "CarePlan",
+    "ClinicalImpression",
+    "QuestionnaireResponse",
+    "AllergyIntolerance",
+    "Immunization",
+    "Composition",
+}
+
+
+class DependencyNotReady(Exception):
+    pass
+
+
+def _row_value(row_or_doc, fieldname, default=None):
+    if hasattr(row_or_doc, "get"):
+        return row_or_doc.get(fieldname, default)
+    return getattr(row_or_doc, fieldname, default)
+
+
+def _queue_target_docstatus(row_or_doc):
+    target_doctype = _row_value(row_or_doc, "target_doctype")
+    target_docname = _row_value(row_or_doc, "target_docname")
+
+    if target_doctype and target_docname and frappe.db.exists(target_doctype, target_docname):
+        status = target_docstatus_label(
+            frappe.db.get_value(target_doctype, target_docname, "docstatus")
+        )
+    else:
+        status = _row_value(row_or_doc, "target_docstatus") or "Draft"
+
+    queue_name = _row_value(row_or_doc, "name")
+    if queue_name and frappe.get_meta(QUEUE_DOCTYPE).has_field("target_docstatus"):
+        frappe.db.set_value(
+            QUEUE_DOCTYPE,
+            queue_name,
+            "target_docstatus",
+            status,
+            update_modified=False,
+        )
+    return status
+
+
+def _is_queue_target_submitted(row_or_doc):
+    return _queue_target_docstatus(row_or_doc) == "Submitted"
+
+
+def _mark_waiting_submission(doc, status=None):
+    status = status or _queue_target_docstatus(doc)
+    message = (
+        f"Target ERPNext document {getattr(doc, 'target_doctype', None) or 'target document'}/"
+        f"{getattr(doc, 'target_docname', None) or '-'} masih {status}. "
+        "Submit target document before SatuSehat send."
+    )
+    frappe.db.set_value(
+        QUEUE_DOCTYPE,
+        doc.name,
+        {
+            "target_docstatus": status,
+            "approval_status": "Pending",
+            "approved_by": None,
+            "approved_at": None,
+            "sync_status": "pending",
+            "error_message": message,
+        },
+        update_modified=True,
+    )
+    frappe.db.commit()
+    return message
+
+
+def _mark_waiting_dependency(doc, message):
+    frappe.db.set_value(
+        QUEUE_DOCTYPE,
+        doc.name,
+        {
+            "sync_status": SYNC_STATUS_WAITING,
+            "last_attempt_at": None,
+            "error_message": message,
+        },
+        update_modified=True,
+    )
+    frappe.db.commit()
+    return message
+
+
+def release_waiting_dependencies(limit=500):
+    rows = frappe.get_all(
+        QUEUE_DOCTYPE,
+        filters={
+            "import_status": IMPORT_STATUS_IMPORTED,
+            "approval_status": "Approved",
+            "target_docstatus": "Submitted",
+            "sync_status": SYNC_STATUS_WAITING,
+        },
+        fields=["name"],
+        order_by="modified asc",
+        limit_page_length=int(limit or 500),
+    )
+
+    released = []
+    refreshed = False
+    for row in rows:
+        if not frappe.db.exists(QUEUE_DOCTYPE, row.name):
+            continue
+
+        doc = frappe.get_doc(QUEUE_DOCTYPE, row.name)
+        message = _current_dependency_wait_message(doc)
+        if message:
+            if message and message != getattr(doc, "error_message", None):
+                frappe.db.set_value(
+                    QUEUE_DOCTYPE,
+                    doc.name,
+                    "error_message",
+                    message,
+                    update_modified=False,
+                )
+                refreshed = True
+            continue
+
+        frappe.db.set_value(
+            QUEUE_DOCTYPE,
+            doc.name,
+            {
+                "sync_status": "pending",
+                "last_attempt_at": None,
+                "error_message": None,
+            },
+            update_modified=True,
+        )
+        released.append(doc.name)
+
+    if released or refreshed:
+        frappe.db.commit()
+
+    return released
+
+_RESOURCE_EXISTS_CACHE = {}
+
+
+def _satusehat_resource_exists(resource_type, resource_id):
+    if not resource_type or not resource_id:
+        return False
+
+    cache_key = (resource_type, resource_id)
+    if cache_key in _RESOURCE_EXISTS_CACHE:
+        return _RESOURCE_EXISTS_CACHE[cache_key]
+
+    try:
+        response = requests.get(
+            _resource_url(resource_type, resource_id),
+            headers=_satusehat_headers(),
+            timeout=SATUSEHAT_HTTP_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as error:
+        raise DependencyNotReady(
+            f"Belum bisa validasi dependency {resource_type}/{resource_id}: {error}"
+        )
+
+    if response.ok:
+        _RESOURCE_EXISTS_CACHE[cache_key] = True
+        return True
+
+    if response.status_code in (400, 404):
+        _RESOURCE_EXISTS_CACHE[cache_key] = False
+        return False
+
+    raise frappe.ValidationError(
+        f"Dependency check HTTP {response.status_code}: {response.text or ''}"
+    )
+
+
+def _is_reference_not_found_response(response_text):
+    response_text = response_text or ""
+    if "reference_not_found" in response_text:
+        return True
+    if "reference target(s) not found" in response_text:
+        return True
+    return False
+
+
+def _reset_missing_reference_targets(fhir, response_text):
+    response_text = response_text or ""
+    targets = re.findall(r"([A-Za-z]+(?:[A-Za-z]+)?)/([A-Za-z0-9][A-Za-z0-9\\-\\.]{5,})", response_text)
+
+    for resource_type, local_id in targets:
+        if resource_type not in REFERENCE_RESOURCE_TYPES:
+            continue
+
+        row = (
+            _find_dependency_queue(resource_type, local_id)
+            or _find_dependency_queue_from_context(resource_type, fhir)
+        )
+        if not row:
+            continue
+
+        _reset_dependency_for_retry(
+            row,
+            (
+                f"SATUSEHAT menolak child resource karena dependency tidak ditemukan: "
+                f"{resource_type}/{local_id}. Parent dijadwalkan ulang."
+            ),
+            clear_resource_id=row.get("sync_status") == "sent",
+        )
+
+
+def _find_sent_resource_id(resource_type, local_id):
+    row = _find_dependency_queue(resource_type, local_id)
+    if row and row.get("sync_status") == "sent" and row.get("satusehat_resource_id"):
+        return row.get("satusehat_resource_id")
+
+    return None
+
+def _first_coding(value):
+    if not isinstance(value, dict):
+        return {}
+    coding = value.get("coding") or []
+    return coding[0] if coding else {}
+
+def _primary_code_parts(fhir):
+    codeable = (
+        fhir.get("code")
+        or fhir.get("vaccineCode")
+        or fhir.get("medicationCodeableConcept")
+    )
+    coding = _first_coding(codeable)
+    system = coding.get("system")
+    code = coding.get("code")
+    return system, code
+
+def _find_sent_resource_id_by_code(resource_type, fhir):
+    system, code = _primary_code_parts(fhir)
+    if not code:
+        return None
+
+    like_code = f"%{code}%"
+    if system:
+        like_system = f"%{system}%"
+        rows = frappe.db.sql(
+            f"""
+            SELECT satusehat_resource_id
+            FROM `tab{QUEUE_DOCTYPE}`
+            WHERE resource_type = %s
+              AND sync_status = 'sent'
+              AND satusehat_resource_id IS NOT NULL
+              AND fhir_payload LIKE %s
+              AND fhir_payload LIKE %s
+            ORDER BY modified DESC
+            LIMIT 1
+            """,
+            (resource_type, like_code, like_system),
+        )
+    else:
+        rows = frappe.db.sql(
+            f"""
+            SELECT satusehat_resource_id
+            FROM `tab{QUEUE_DOCTYPE}`
+            WHERE resource_type = %s
+              AND sync_status = 'sent'
+              AND satusehat_resource_id IS NOT NULL
+              AND fhir_payload LIKE %s
+            ORDER BY modified DESC
+            LIMIT 1
+            """,
+            (resource_type, like_code),
+        )
+
+    return rows[0][0] if rows else None
+
+def _find_dependency_queue(resource_type, local_id):
+    if not local_id:
+        return None
+
+    candidates = []
+
+    # contoh local_id: Encounter-2026/05/22/940001
+    candidates.append(local_id)
+
+    # contoh local_id: 2026/05/22/940001
+    if not local_id.startswith(f"{resource_type}-"):
+        candidates.append(f"{resource_type}-{local_id}")
+
+    for external_id in candidates:
+        row = _get_dependency_queue_row({"resource_type": resource_type, "external_id": external_id})
+        if row:
+            return row
+
+    ack_found = _find_dependency_queue_by_ack_id(resource_type, local_id)
+    if ack_found:
+        return ack_found
+
+    found = frappe.db.sql(
+        f"""
+        SELECT
+          name,
+          external_id,
+          sync_status,
+          satusehat_resource_id,
+          target_doctype,
+          target_docname,
+          target_docstatus
+        FROM `tab{QUEUE_DOCTYPE}`
+        WHERE resource_type = %s
+          AND (
+              external_id = %s
+              OR external_id LIKE %s
+              OR fhir_payload LIKE %s
+              OR payload LIKE %s
+          )
+        ORDER BY
+          CASE sync_status
+            WHEN 'sent' THEN 0
+            WHEN 'processing' THEN 1
+            WHEN 'pending' THEN 2
+            WHEN 'waiting' THEN 3
+            WHEN 'failed' THEN 4
+            WHEN 'failed_permanent' THEN 5
+            ELSE 9
+          END,
+          modified DESC
+        LIMIT 1
+        """,
+        (resource_type, local_id, f"%{local_id}%", f"%{local_id}%", f"%{local_id}%"),
+        as_dict=True,
+    )
+
+    if found:
+        return found[0]
+
+    return None
+
+def _get_dependency_queue_row(filters):
+    rows = frappe.get_all(
+        QUEUE_DOCTYPE,
+        filters=filters,
+        fields=[
+            "name",
+            "external_id",
+            "sync_status",
+            "satusehat_resource_id",
+            "target_doctype",
+            "target_docname",
+            "target_docstatus",
+        ],
+        order_by="modified desc",
+        limit_page_length=20,
+    )
+    rows.sort(key=lambda row: (SYNC_STATUS_ORDER.get(row.get("sync_status"), 9), row.get("name")))
+    return rows[0] if rows else None
+
+def _find_sent_resource_id_by_ack_id(resource_type, ack_id):
+    row = _find_dependency_queue_by_ack_id(resource_type, ack_id)
+    if row and row.get("sync_status") == "sent":
+        return row.get("satusehat_resource_id")
+    return None
+
+def _find_dependency_queue_by_ack_id(resource_type, ack_id):
+    if not ack_id:
+        return None
+
+    rows = frappe.get_all(
+        QUEUE_DOCTYPE,
+        filters={
+            "resource_type": resource_type,
+        },
+        fields=[
+            "name",
+            "external_id",
+            "sync_status",
+            "satusehat_resource_id",
+            "target_doctype",
+            "target_docname",
+            "target_docstatus",
+        ],
+        order_by="modified desc",
+        limit_page_length=1000,
+    )
+    rows.sort(key=lambda row: (SYNC_STATUS_ORDER.get(row.get("sync_status"), 9), row.get("name")))
+    for row in rows:
+        if _java_name_uuid(f"khanza-erpnext-fhir:{row.external_id}") == ack_id:
+            return row
+    return None
+
+def _java_name_uuid(text):
+    digest = bytearray(hashlib.md5((text or "").encode("utf-8")).digest())
+    digest[6] = (digest[6] & 0x0F) | 0x30
+    digest[8] = (digest[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(digest)))
+
+
+def _extract_no_rawat_candidates(value):
+    text = _json_dumps(value)
+    return list(dict.fromkeys(re.findall(r"\d{4}/\d{2}/\d{2}/\d{6}", text)))
+
+def _find_dependency_queue_from_context(resource_type, context_fhir):
+    if resource_type != "Encounter":
+        return None
+
+    for no_rawat in _extract_no_rawat_candidates(context_fhir):
+        row = _find_dependency_queue("Encounter", no_rawat)
+        if row:
+            return row
+
+    return None
+
+def _reset_dependency_for_retry(row, reason, clear_resource_id=False):
+    if not row or not row.get("name"):
+        return
+
+    updates = {
+        "sync_status": "pending",
+        "last_attempt_at": None,
+        "error_message": reason,
+    }
+    if clear_resource_id and frappe.get_meta(QUEUE_DOCTYPE).has_field("satusehat_resource_id"):
+        updates["satusehat_resource_id"] = None
+
+    frappe.db.set_value(
+        QUEUE_DOCTYPE,
+        row.get("name"),
+        updates,
+        update_modified=True,
+    )
+
+def _verified_dependency_resource_id(row, resource_type, local_id):
+    resource_id = row.get("satusehat_resource_id")
+    if not resource_id:
+        return None
+
+    if _satusehat_resource_exists(resource_type, resource_id):
+        return resource_id
+
+    _reset_dependency_for_retry(
+        row,
+        (
+            f"ID SATUSEHAT yang tersimpan tidak ditemukan saat dipakai sebagai dependency: "
+            f"{resource_type}/{resource_id}. Referensi lokal: {resource_type}/{local_id}"
+        ),
+        clear_resource_id=True,
+    )
+    frappe.db.commit()
+    raise DependencyNotReady(
+        f"Dependency {resource_type}/{local_id} punya ID lama {resource_id}, "
+        "tapi ID itu tidak ada di SATUSEHAT. Parent di-reset untuk dikirim ulang."
+    )
+
+def _resolve_reference_value(reference, context_fhir=None):
+    if not isinstance(reference, str) or "/" not in reference:
+        return reference
+
+    resource_type, local_id = reference.split("/", 1)
+
+    if resource_type not in REFERENCE_RESOURCE_TYPES:
+        return reference
+
+    dependency_row = (
+        _find_dependency_queue(resource_type, local_id)
+        or _find_dependency_queue_from_context(resource_type, context_fhir)
+    )
+    if dependency_row:
+        if dependency_row.get("sync_status") == "sent":
+            satusehat_id = _verified_dependency_resource_id(dependency_row, resource_type, local_id)
+            if satusehat_id:
+                return f"{resource_type}/{satusehat_id}"
+
+        target_status = _queue_target_docstatus(dependency_row)
+        if target_status != "Submitted":
+            raise DependencyNotReady(
+                f"Dependency belum siap: {reference}. Parent sync record {dependency_row.get('name')} "
+                f"target document masih {target_status}. Submit parent dulu."
+            )
+
+        if dependency_row.get("sync_status") == "failed":
+            _reset_dependency_for_retry(
+                dependency_row,
+                f"Dibutuhkan oleh resource lain sebagai dependency {reference}; dijadwalkan ulang.",
+            )
+            frappe.db.commit()
+
+        raise DependencyNotReady(
+            f"Dependency belum siap: {reference}. Parent sync record {dependency_row.get('name')} "
+            f"statusnya {dependency_row.get('sync_status') or 'unknown'}."
+        )
+
+    if _satusehat_resource_exists(resource_type, local_id):
+        return reference
+
+    raise DependencyNotReady(
+        f"Dependency belum siap: {reference} belum punya parent sync record/satusehat_resource_id di ERPNext/SATUSEHAT"
+    )
+
+
+def _dependency_message_list(errors):
+    messages = []
+    seen = set()
+    for error in errors:
+        message = str(error).strip()
+        if not message or message in seen:
+            continue
+        seen.add(message)
+        messages.append(message)
+    return messages
+
+
+def _format_dependency_errors(errors):
+    messages = _dependency_message_list(errors)
+    if not messages:
+        return ""
+    if len(messages) == 1:
+        return messages[0]
+    return "Beberapa dependency belum siap:\n- " + "\n- ".join(messages)
+
+
+def _current_dependency_wait_message(doc):
+    try:
+        fhir = _as_dict(getattr(doc, "fhir_payload", None))
+        if not fhir:
+            return None
+        _resolve_fhir_references(copy.deepcopy(fhir))
+    except DependencyNotReady as error:
+        return str(error)
+    return None
+
+
+def _resolve_fhir_references(value, context_fhir=None):
+    if context_fhir is None:
+        context_fhir = value
+
+    errors = []
+
+    def walk(current):
+        if isinstance(current, dict):
+            if isinstance(current.get("reference"), str):
+                try:
+                    current["reference"] = _resolve_reference_value(current["reference"], context_fhir)
+                except DependencyNotReady as error:
+                    errors.append(error)
+
+            for child in current.values():
+                walk(child)
+
+        elif isinstance(current, list):
+            for child in current:
+                walk(child)
+
+    walk(value)
+
+    if errors:
+        raise DependencyNotReady(_format_dependency_errors(errors))
+
+    return value
+
 
 def recover_stuck_processing(minutes=30):
     """
-    Recovery untuk queue yang nyangkut di status processing.
+    Recovery untuk sync record yang nyangkut di status processing.
 
     Penyebab umum:
     - worker mati/restart saat sedang kirim
@@ -65,6 +680,117 @@ def recover_stuck_processing(minutes=30):
     frappe.db.commit()
 
 
+def recover_dependency_failures():
+    frappe.db.sql(
+        f"""
+        UPDATE `tab{QUEUE_DOCTYPE}`
+        SET
+            sync_status = %s,
+            last_attempt_at = NULL,
+            modified = NOW()
+        WHERE import_status = 'imported'
+          AND approval_status = 'Approved'
+          AND sync_status = 'failed'
+          AND attempts < %s
+          AND (
+              error_message LIKE '%%reference_not_found%%'
+              OR error_message LIKE '%%reference target(s) not found%%'
+              OR error_message LIKE '%%Dependency belum siap%%'
+              OR error_message LIKE '%%dependency belum siap%%'
+              OR error_message LIKE '%%Dibutuhkan oleh resource lain sebagai dependency%%'
+          )
+        """,
+        (SYNC_STATUS_WAITING, MAX_ATTEMPTS),
+    )
+    frappe.db.commit()
+
+
+def recover_duplicate_failures():
+    # Duplicate tanpa ID hasil lookup adalah error data/preflight, bukan dependency
+    # sementara. Jangan reset attempts ke 0, supaya bisa mencapai failed_permanent.
+    return
+
+
+def _reference_values(value):
+    references = []
+    if isinstance(value, dict):
+        reference = value.get("reference")
+        if isinstance(reference, str):
+            references.append(reference)
+        for child in value.values():
+            references.extend(_reference_values(child))
+    elif isinstance(value, list):
+        for child in value:
+            references.extend(_reference_values(child))
+    return references
+
+
+def _dependency_rows_for_doc(doc):
+    fhir = _as_dict(doc.fhir_payload)
+    rows = []
+    seen = set()
+
+    for reference in _reference_values(fhir):
+        if not isinstance(reference, str) or "/" not in reference:
+            continue
+
+        resource_type, local_id = reference.split("/", 1)
+        if resource_type not in REFERENCE_RESOURCE_TYPES:
+            continue
+
+        row = (
+            _find_dependency_queue(resource_type, local_id)
+            or _find_dependency_queue_from_context(resource_type, fhir)
+        )
+        if row and row.get("name") and row.get("name") != doc.name and row.get("name") not in seen:
+            seen.add(row.get("name"))
+            rows.append(row)
+
+    return rows
+
+
+def _expand_with_dependencies(queue_names, max_rounds=5):
+    expanded = list(dict.fromkeys(queue_names or []))
+
+    for _round in range(int(max_rounds or 5)):
+        changed = False
+        for queue_name in list(expanded):
+            if not frappe.db.exists(QUEUE_DOCTYPE, queue_name):
+                continue
+            doc = frappe.get_doc(QUEUE_DOCTYPE, queue_name)
+            for row in _dependency_rows_for_doc(doc):
+                if row.get("name") not in expanded:
+                    expanded.append(row.get("name"))
+                    changed = True
+        if not changed:
+            break
+
+    return expanded
+
+def _prepare_pending_batch_dependencies(queue_names):
+    if not queue_names:
+        return
+
+    for queue_name in queue_names:
+        if not frappe.db.exists(QUEUE_DOCTYPE, queue_name):
+            continue
+
+        doc = frappe.get_doc(QUEUE_DOCTYPE, queue_name)
+        if getattr(doc, "import_status", None) in (IMPORT_STATUS_PENDING, IMPORT_STATUS_FAILED):
+            try:
+                process_import_queue_item(doc.name)
+            except Exception:
+                frappe.log_error(
+                    title=f"Khanza SatuSehat Dependency Import Error: {doc.name}",
+                    message=frappe.get_traceback(),
+                )
+                continue
+
+        doc.reload()
+        _queue_target_docstatus(doc)
+
+    frappe.db.commit()
+
 def process_queue(limit=50):
     limit = int(limit or 50)
     items = frappe.get_all(
@@ -85,7 +811,7 @@ def process_queue(limit=50):
             process_import_queue_item(item.name)
         except Exception:
             frappe.log_error(
-                title=f"Khanza SatuSehat Queue Error: {item.name}",
+                title=f"Khanza SatuSehat Sync Record Error: {item.name}",
                 message=frappe.get_traceback(),
             )
 
@@ -121,6 +847,7 @@ def process_import_queue_item(queue_name):
             raise frappe.ValidationError(_("FHIR payload with resourceType is required"))
 
         target_doc = import_fhir_to_healthcare_doc(doc, fhir, doc.external_id)
+        target_docstatus = target_docstatus_label(getattr(target_doc, "docstatus", 0))
 
         frappe.db.set_value(
             QUEUE_DOCTYPE,
@@ -130,6 +857,7 @@ def process_import_queue_item(queue_name):
                 "imported_at": _now(),
                 "target_doctype": target_doc.doctype,
                 "target_docname": target_doc.name,
+                "target_docstatus": target_docstatus,
                 "attempts": 0,
                 "last_attempt_at": None,
                 "error_message": None,
@@ -185,46 +913,164 @@ def process_import_queue_item(queue_name):
         raise
 
 
+def _send_queue_names_in_order(
+    queue_names,
+    respect_retry_delay=False,
+    max_rounds=5,
+    max_attempts_per_call=None,
+    max_seconds_per_call=None,
+):
+    pending_names = _expand_with_dependencies(queue_names)
+    _prepare_pending_batch_dependencies(pending_names)
+    pending_names = _expand_with_dependencies(pending_names)
+    started_at = time.monotonic()
+    stats = {
+        "requested": len(list(dict.fromkeys(queue_names or []))),
+        "expanded": len(pending_names),
+        "attempted": 0,
+        "sent": 0,
+        "released_waiting": 0,
+        "waiting_dependency": 0,
+        "waiting_submission": 0,
+        "skipped": 0,
+        "failed": 0,
+        "rounds": 0,
+        "stalled": False,
+        "stop_reason": None,
+        "remaining_pending": [],
+    }
+
+    for _round in range(int(max_rounds or 5)):
+        if not pending_names:
+            break
+
+        stats["rounds"] += 1
+        docs = [
+            frappe.get_doc(QUEUE_DOCTYPE, name)
+            for name in pending_names
+            if frappe.db.exists(QUEUE_DOCTYPE, name)
+        ]
+        docs.sort(key=_resource_sort_key)
+
+        next_pending = []
+        progressed = False
+
+        for index, doc in enumerate(docs):
+            if max_attempts_per_call and stats["attempted"] >= int(max_attempts_per_call):
+                next_pending.extend([remaining_doc.name for remaining_doc in docs[index:]])
+                stats["stop_reason"] = "batch_limit"
+                break
+
+            if max_seconds_per_call and (time.monotonic() - started_at) >= int(max_seconds_per_call):
+                next_pending.extend([remaining_doc.name for remaining_doc in docs[index:]])
+                stats["stop_reason"] = "time_budget"
+                break
+
+            if respect_retry_delay and not _should_retry(doc.last_attempt_at, doc.attempts or 0):
+                next_pending.append(doc.name)
+                continue
+
+            try:
+                stats["attempted"] += 1
+                result = send_queue_item(doc.name)
+                released_waiting = []
+                if isinstance(result, dict):
+                    released_waiting = result.get("released_waiting") or []
+                    result = result.get("status")
+
+                if result == "waiting_dependency":
+                    stats["waiting_dependency"] += 1
+                    next_pending.extend(
+                        name for name in _expand_with_dependencies([doc.name]) if name != doc.name
+                    )
+                elif result == "waiting_submission":
+                    stats["waiting_submission"] += 1
+                    next_pending.append(doc.name)
+                elif result == "sent":
+                    stats["sent"] += 1
+                    if released_waiting:
+                        stats["released_waiting"] += len(released_waiting)
+                        next_pending.extend(released_waiting)
+                    progressed = True
+                else:
+                    stats["skipped"] += 1
+            except Exception:
+                stats["failed"] += 1
+                frappe.log_error(
+                    title=f"Khanza SatuSehat Send Error: {doc.name}",
+                    message=frappe.get_traceback(),
+                )
+
+        next_pending = list(dict.fromkeys(next_pending))
+        if not next_pending:
+            break
+
+        pending_names = _expand_with_dependencies(next_pending)
+        if stats["stop_reason"]:
+            break
+
+        if not progressed:
+            stats["stalled"] = True
+            stats["stop_reason"] = "waiting_dependency_or_no_progress"
+            break
+
+    stats["remaining_pending"] = pending_names
+    return stats
+
+
 def send_approved_queue(limit=50):
     recover_stuck_processing(minutes=30)
+    recover_dependency_failures()
+    recover_duplicate_failures()
+    release_waiting_dependencies()
 
     limit = int(limit or 50)
+
     items = frappe.get_all(
         QUEUE_DOCTYPE,
         filters={
             "import_status": IMPORT_STATUS_IMPORTED,
             "approval_status": "Approved",
+            "target_docstatus": "Submitted",
             "sync_status": ["in", ["pending", "failed"]],
         },
-        fields=["name", "attempts", "last_attempt_at"],
-        order_by="creation asc",
+        fields=["name", "resource_type", "creation", "attempts", "last_attempt_at"],
         limit_page_length=limit,
     )
 
-    for item in items:
-        if not _should_retry(item.last_attempt_at, item.attempts or 0):
-            continue
+    items.sort(key=lambda row: (
+        RESOURCE_SEND_ORDER.get(row.resource_type, 999),
+        row.creation,
+        row.name,
+    ))
 
-        try:
-            send_queue_item(item.name)
-        except Exception:
-            frappe.log_error(
-                title=f"Khanza SatuSehat Send Error: {item.name}",
-                message=frappe.get_traceback(),
-            )
+    return _send_queue_names_in_order(
+        [item.name for item in items],
+        respect_retry_delay=True,
+        max_rounds=5,
+        max_attempts_per_call=limit,
+        max_seconds_per_call=None,
+    )
 
 
-def send_many(queue_names):
+def send_many(
+    queue_names,
+    max_attempts_per_call=SEND_BATCH_LIMIT,
+    max_seconds_per_call=SEND_TIME_BUDGET_SECONDS,
+):
     recover_stuck_processing(minutes=30)
+    recover_dependency_failures()
+    recover_duplicate_failures()
+    release_waiting_dependencies()
 
-    for queue_name in _parse_names(queue_names):
-        try:
-            send_queue_item(queue_name)
-        except Exception:
-            frappe.log_error(
-                title=f"Khanza SatuSehat Bulk Send Error: {queue_name}",
-                message=frappe.get_traceback(),
-            )
+    names = _expand_with_dependencies(_parse_names(queue_names))
+    return _send_queue_names_in_order(
+        names,
+        respect_retry_delay=False,
+        max_rounds=5,
+        max_attempts_per_call=max_attempts_per_call,
+        max_seconds_per_call=max_seconds_per_call,
+    )
 
 
 def process_queue_item(queue_name):
@@ -245,16 +1091,32 @@ def send_queue_item(queue_name):
     doc = frappe.get_doc(QUEUE_DOCTYPE, queue_name)
 
     if getattr(doc, "import_status", IMPORT_STATUS_IMPORTED) != IMPORT_STATUS_IMPORTED:
-        return
+        return "skipped"
 
     if doc.approval_status != "Approved":
-        return
+        return "skipped"
+
+    if not _is_queue_target_submitted(doc):
+        _mark_waiting_submission(doc)
+        return "waiting_submission"
 
     if doc.sync_status == "processing" and not _is_stale_processing(doc, minutes=30):
-        return
+        return "skipped"
 
     if doc.sync_status not in ("pending", "failed", "processing"):
-        return
+        return "skipped"
+
+    preflight_fhir = None
+    try:
+        preflight_fhir = _normalize_fhir_for_satusehat(_as_dict(doc.fhir_payload))
+        if not preflight_fhir.get("resourceType"):
+            raise frappe.ValidationError(_("FHIR payload with resourceType is required"))
+        preflight_fhir = _resolve_fhir_references(preflight_fhir)
+    except DependencyNotReady as error:
+        _mark_waiting_dependency(doc, str(error))
+        return "waiting_dependency"
+    except Exception:
+        preflight_fhir = None
 
     sent_to_satusehat = False
     satusehat_success = {}
@@ -276,30 +1138,53 @@ def send_queue_item(queue_name):
     log_name = _append_log(doc.name, attempt_number, "attempt")
 
     try:
-        fhir = _as_dict(doc.fhir_payload)
-        if not fhir.get("resourceType"):
-            raise frappe.ValidationError(_("FHIR payload with resourceType is required"))
+        fhir = preflight_fhir
+        if fhir is None:
+            fhir = _as_dict(doc.fhir_payload)
+            if not fhir.get("resourceType"):
+                raise frappe.ValidationError(_("FHIR payload with resourceType is required"))
 
-        fhir = _normalize_fhir_for_satusehat(fhir)
+            fhir = _normalize_fhir_for_satusehat(fhir)
+            fhir = _resolve_fhir_references(fhir)
 
-        resource_id = getattr(doc, "satusehat_resource_id", None) or fhir.get("id")
-        effective_method = doc.method or "POST"
+        # satusehat_resource_id adalah satu-satunya ID asli SATUSEHAT.
+        # ID lokal dari Khanza tidak boleh dipakai sebagai target PUT create,
+        # karena SATUSEHAT akan menolak jika resource tersebut belum ada.
+        resource_id = getattr(doc, "satusehat_resource_id", None)
+        effective_method = "POST"
+
+        if resource_id and not _satusehat_resource_exists(doc.resource_type, resource_id):
+            frappe.db.set_value(
+                QUEUE_DOCTYPE,
+                doc.name,
+                {
+                    "satusehat_resource_id": None,
+                    "error_message": (
+                        f"ID SATUSEHAT lama {doc.resource_type}/{resource_id} tidak ditemukan; "
+                        "resource akan dibuat ulang."
+                    ),
+                },
+                update_modified=True,
+            )
+            frappe.db.commit()
+            resource_id = None
 
         if resource_id:
             fhir["id"] = resource_id
             effective_method = "PUT"
             url = _resource_url(doc.resource_type, resource_id)
         else:
-            if effective_method == "POST":
-                existing = _find_existing_satusehat_resource(doc.resource_type, fhir)
-                if existing:
-                    resource_id = existing.get("id")
-                    fhir["id"] = resource_id
-                    _safe_store_satusehat_resource_id(doc, fhir, resource_id)
-                    effective_method = "PUT"
-                    url = _resource_url(doc.resource_type, resource_id)
-                else:
-                    url = _endpoint_for(doc, fhir)
+            # Untuk create baru, jangan kirim id lokal ke SATUSEHAT.
+            # SATUSEHAT yang akan generate id resource asli.
+            fhir.pop("id", None)
+
+            existing = _find_existing_satusehat_resource(doc.resource_type, fhir)
+            if existing:
+                resource_id = existing.get("id")
+                fhir["id"] = resource_id
+                _safe_store_satusehat_resource_id(doc, fhir, resource_id)
+                effective_method = "PUT"
+                url = _resource_url(doc.resource_type, resource_id)
             else:
                 url = _endpoint_for(doc, fhir)
 
@@ -308,7 +1193,7 @@ def send_queue_item(queue_name):
             url,
             headers=_satusehat_headers(),
             data=_json_dumps(fhir).encode("utf-8"),
-            timeout=30,
+            timeout=SATUSEHAT_HTTP_TIMEOUT_SECONDS,
         )
 
         response_text = response.text or ""
@@ -327,22 +1212,47 @@ def send_queue_item(queue_name):
                         url,
                         headers=_satusehat_headers(),
                         data=_json_dumps(fhir).encode("utf-8"),
-                        timeout=30,
+                        timeout=SATUSEHAT_HTTP_TIMEOUT_SECONDS,
                     )
 
                     response_text = response.text or ""
                     effective_method = "PUT"
+                else:
+                    resource_id = _find_sent_resource_id_by_code(doc.resource_type, fhir)
+                    if resource_id:
+                        fhir["id"] = resource_id
+                        _safe_store_satusehat_resource_id(doc, fhir, resource_id)
+                        response = None
+                        response_text = _json_dumps(
+                            {
+                                "resourceType": doc.resource_type,
+                                "id": resource_id,
+                                "duplicateResolvedFromLocalQueue": True,
+                            }
+                        )
+                        effective_method = "SKIP_DUPLICATE"
 
-            if not response.ok:
-                raise frappe.ValidationError(f"HTTP {response.status_code}: {response_text}")
+            if response is not None and not response.ok:
+                if effective_method == "POST" and _is_duplicate_response(response_text):
+                    raise frappe.ValidationError(
+                        "Duplicate resource already exists in SatuSehat, "
+                        f"but lookup did not return an id: {response_text}"
+                    )
+                elif _is_reference_not_found_response(response_text):
+                    _reset_missing_reference_targets(fhir, response_text)
+                    frappe.db.commit()
+                    raise DependencyNotReady(f"SATUSEHAT dependency belum siap: {response_text}")
+                else:
+                    raise frappe.ValidationError(f"HTTP {response.status_code}: {response_text}")
 
-        sent_to_satusehat = True
-        satusehat_success = {
-            "status_code": response.status_code,
-            "method": effective_method,
-            "url": url,
-            "body": response_text,
-        }
+        if not sent_to_satusehat:
+            sent_to_satusehat = True
+            satusehat_success = {
+                "status_code": response.status_code if response is not None else 200,
+                "method": effective_method,
+                "url": url,
+                "body": response_text,
+            }
 
         response_resource_id = _response_resource_id(response_text) or resource_id
         if response_resource_id:
@@ -368,7 +1278,7 @@ def send_queue_item(queue_name):
                 "status": "success",
                 "response": _json_dumps(
                     {
-                        "status_code": response.status_code,
+                        "status_code": response.status_code if response is not None else 200,
                         "method": effective_method,
                         "url": url,
                         "body": response_text,
@@ -378,7 +1288,35 @@ def send_queue_item(queue_name):
             },
         )
         frappe.db.commit()
+        released_waiting = release_waiting_dependencies()
+        return {
+            "status": "sent",
+            "released_waiting": released_waiting,
+        }
 
+    except DependencyNotReady as error:
+        frappe.db.set_value(
+            QUEUE_DOCTYPE,
+            doc.name,
+            {
+                "sync_status": SYNC_STATUS_WAITING,
+                "last_attempt_at": None,
+                "error_message": str(error),
+            },
+            update_modified=True,
+        )
+
+        frappe.db.set_value(
+            LOG_DOCTYPE,
+            log_name,
+            {
+                "status": "failure",
+                "error": str(error),
+            },
+        )
+
+        frappe.db.commit()
+        return "waiting_dependency"
     except Exception as error:
         if sent_to_satusehat:
             warning = f"SatuSehat success, ERPNext post-processing failed: {error}"
@@ -414,7 +1352,11 @@ def send_queue_item(queue_name):
                 title=f"Khanza SatuSehat Post-Success Error: {doc.name}",
                 message=frappe.get_traceback(),
             )
-            return
+            released_waiting = release_waiting_dependencies()
+            return {
+                "status": "sent",
+                "released_waiting": released_waiting,
+            }
 
         new_status = "failed_permanent" if attempt_number >= MAX_ATTEMPTS else "failed"
 

@@ -9,6 +9,7 @@ from .constants import (
     LOG_DOCTYPE,
     QUEUE_DOCTYPE,
 )
+from .document_events import target_docstatus_label
 from .utils import (
     _as_dict,
     _canonical_fhir_json,
@@ -22,7 +23,152 @@ from .utils import (
     _parse_names,
     _queue_response,
 )
-from .workers import process_import_queue_item, send_many, send_queue_item
+from .workers import process_import_queue_item, release_waiting_dependencies
+
+def _ensure_imported(doc):
+	import_status = getattr(doc, "import_status", IMPORT_STATUS_IMPORTED)
+	if import_status in (IMPORT_STATUS_PENDING, IMPORT_STATUS_FAILED):
+		try:
+			process_import_queue_item(doc.name)
+		except Exception:
+			frappe.log_error(
+				title=f"Khanza SatuSehat Import Before Approval Error: {doc.name}",
+				message=frappe.get_traceback(),
+			)
+		doc.reload()
+	return getattr(doc, "import_status", IMPORT_STATUS_IMPORTED) == IMPORT_STATUS_IMPORTED
+
+def _target_docstatus_for_queue(doc):
+	target_doctype = getattr(doc, "target_doctype", None)
+	target_docname = getattr(doc, "target_docname", None)
+	if not target_doctype or not target_docname:
+		return "Draft"
+	if not frappe.db.exists(target_doctype, target_docname):
+		return "Draft"
+	return target_docstatus_label(frappe.db.get_value(target_doctype, target_docname, "docstatus"))
+
+def _refresh_target_docstatus(doc):
+	status = _target_docstatus_for_queue(doc)
+	if frappe.get_meta(QUEUE_DOCTYPE).has_field("target_docstatus"):
+		frappe.db.set_value(
+			QUEUE_DOCTYPE,
+			doc.name,
+			"target_docstatus",
+			status,
+			update_modified=False,
+		)
+		doc.target_docstatus = status
+	return status
+
+def _target_document_label(doc):
+	target_doctype = getattr(doc, "target_doctype", None) or "target document"
+	target_docname = getattr(doc, "target_docname", None) or "-"
+	return f"{target_doctype}/{target_docname}"
+
+def _ensure_target_submitted(doc):
+	status = _refresh_target_docstatus(doc)
+	if status == "Submitted":
+		return True
+
+	message = (
+		f"Target ERPNext document {_target_document_label(doc)} masih {status}. "
+		"Submit target document before SatuSehat approval."
+	)
+	if getattr(doc, "sync_status", None) != "sent":
+		frappe.db.set_value(
+			QUEUE_DOCTYPE,
+			doc.name,
+			{
+				"approval_status": "Pending",
+				"approved_by": None,
+				"approved_at": None,
+				"sync_status": "pending",
+				"error_message": message,
+			},
+			update_modified=True,
+		)
+		doc.approval_status = "Pending"
+		doc.approved_by = None
+		doc.approved_at = None
+		doc.sync_status = "pending"
+		doc.error_message = message
+	return False
+
+def _queue_status_summary(queue_names):
+	queue_names = _parse_names(queue_names)
+	if not queue_names:
+		return {
+			"requested": 0,
+			"by_sync_status": {},
+			"by_import_status": {},
+			"by_approval_status": {},
+			"by_target_docstatus": {},
+			"items": [],
+		}
+
+	rows = frappe.get_all(
+		QUEUE_DOCTYPE,
+		filters={"name": ["in", queue_names]},
+		fields=[
+			"name",
+			"resource_type",
+			"import_status",
+			"approval_status",
+			"sync_status",
+			"target_docstatus",
+			"attempts",
+			"error_message",
+		],
+		limit_page_length=len(queue_names),
+	)
+
+	summary = {
+		"requested": len(queue_names),
+		"by_sync_status": {},
+		"by_import_status": {},
+		"by_approval_status": {},
+		"by_target_docstatus": {},
+		"items": rows,
+	}
+	for row in rows:
+		for key, fieldname in (
+			("by_sync_status", "sync_status"),
+			("by_import_status", "import_status"),
+			("by_approval_status", "approval_status"),
+			("by_target_docstatus", "target_docstatus"),
+		):
+			value = row.get(fieldname) or "unknown"
+			summary[key][value] = summary[key].get(value, 0) + 1
+	return summary
+
+def _enqueue_send_many(queue_names):
+	queue_names = _parse_names(queue_names)
+	if not queue_names:
+		return _queue_status_summary([])
+
+	frappe.enqueue(
+		"healthcare.healthcare.khanza_main.send_many",
+		queue_names=queue_names,
+		queue="long",
+		enqueue_after_commit=True,
+		job_name=f"khanza-satusehat-send-{frappe.generate_hash(length=10)}",
+	)
+
+	summary = _queue_status_summary(queue_names)
+	summary["queued"] = True
+	summary["queued_count"] = len(queue_names)
+	return summary
+
+def _enqueue_approved_queue(limit=200):
+	limit = int(limit or 200)
+	frappe.enqueue(
+		"healthcare.healthcare.khanza_main.send_approved_queue",
+		limit=limit,
+		queue="long",
+		enqueue_after_commit=True,
+		job_name=f"khanza-satusehat-approved-send-{frappe.generate_hash(length=10)}",
+	)
+	return {"queued": True, "limit": limit}
 
 @frappe.whitelist(allow_guest=True)
 def receive_document(**kwargs):
@@ -38,6 +184,7 @@ def receive_document(**kwargs):
 	if existing:
 		doc = frappe.get_doc(QUEUE_DOCTYPE, existing)
 		payload_changed = _canonical_fhir_json(doc.fhir_payload) != _canonical_fhir_json(fhir)
+		already_sent = doc.sync_status == "sent"
 
 		if payload_changed:
 			doc.resource_type = payload.get("resource_type") or fhir.get("resourceType")
@@ -48,15 +195,23 @@ def receive_document(**kwargs):
 			doc.fhir_payload = _json_dumps(fhir)
 			doc.import_status = IMPORT_STATUS_PENDING
 			doc.imported_at = None
-			doc.approval_status = "Pending"
-			doc.approved_by = None
-			doc.approved_at = None
-			doc.rejection_reason = None
-			doc.sync_status = "pending"
 			doc.attempts = 0
 			doc.last_attempt_at = None
-			doc.sent_at = None
-			doc.error_message = "Updated from Khanza, needs re-approval"
+
+			if already_sent:
+				doc.approval_status = "Approved"
+				doc.rejection_reason = None
+				doc.sync_status = "sent"
+				doc.error_message = "Updated from Khanza after SatuSehat sent; ERPNext document refreshed only"
+			else:
+				doc.approval_status = "Pending"
+				doc.approved_by = None
+				doc.approved_at = None
+				doc.rejection_reason = None
+				doc.sync_status = "pending"
+				doc.sent_at = None
+				doc.error_message = "Updated from Khanza, needs re-approval"
+
 			doc.save(ignore_permissions=True)
 
 		if payload_changed or getattr(doc, "import_status", None) in (IMPORT_STATUS_PENDING, IMPORT_STATUS_FAILED):
@@ -68,6 +223,8 @@ def receive_document(**kwargs):
 					message=frappe.get_traceback(),
 				)
 			doc.reload()
+		if already_sent:
+			return _queue_response(doc, "already_sent_refreshed" if payload_changed else "already_sent")
 		return _queue_response(doc, "updated_for_review" if payload_changed else "already_queued")
 
 	doc = frappe.get_doc(
@@ -98,6 +255,7 @@ def receive_document(**kwargs):
 			"healthcare.healthcare.khanza_main.process_import_queue_item",
 			queue_name=doc.name,
 			queue="long",
+			enqueue_after_commit=True,
 		)
 	doc.reload()
 
@@ -109,29 +267,35 @@ def approve(queue_name):
 	doc = frappe.get_doc(QUEUE_DOCTYPE, queue_name)
 	if doc.sync_status == "sent":
 		return _queue_response(doc, "already_sent")
-	if getattr(doc, "import_status", IMPORT_STATUS_IMPORTED) != IMPORT_STATUS_IMPORTED:
-		frappe.throw(_("Only imported queue items can be approved for SatuSehat sending"))
+	if not _ensure_imported(doc):
+		frappe.throw(
+			_("Sync record belum berhasil di-import ke ERPNext: {0}").format(
+				doc.error_message or doc.import_status
+			)
+		)
+	if not _ensure_target_submitted(doc):
+		frappe.throw(_(doc.error_message))
 
 	doc.approval_status = "Approved"
 	doc.approved_by = frappe.session.user
 	doc.approved_at = _now()
 	doc.rejection_reason = None
-	if doc.sync_status == "failed_permanent":
+	if doc.sync_status != "sent":
 		doc.sync_status = "pending"
+		doc.error_message = None
 	doc.save(ignore_permissions=True)
-	frappe.enqueue(
-		"healthcare.healthcare.khanza_main.send_queue_item",
-		queue_name=doc.name,
-		queue="long",
-	)
-	return _queue_response(doc, "approved")
+	summary = _enqueue_send_many([doc.name])
+	doc.reload()
+	response = _queue_response(doc, "approved")
+	response["send_summary"] = summary
+	return response
 
 @frappe.whitelist(allow_guest=True)
 def approve_many(queue_names=None, names=None):
 	frappe.only_for(("System Manager", "Healthcare Administrator"))
 	queue_names = _parse_names(queue_names or names)
 	if not queue_names:
-		frappe.throw(_("No queue items selected"))
+		frappe.throw(_("No sync records selected"))
 
 	approved = []
 	skipped = []
@@ -140,25 +304,41 @@ def approve_many(queue_names=None, names=None):
 		if doc.sync_status == "sent":
 			skipped.append({"queue_name": queue_name, "reason": "already_sent"})
 			continue
-		if getattr(doc, "import_status", IMPORT_STATUS_IMPORTED) != IMPORT_STATUS_IMPORTED:
-			skipped.append({"queue_name": queue_name, "reason": "not_imported"})
+		if not _ensure_imported(doc):
+			skipped.append(
+				{
+					"queue_name": queue_name,
+					"reason": "not_imported",
+					"import_status": getattr(doc, "import_status", None),
+					"error_message": getattr(doc, "error_message", None),
+				}
+			)
+			continue
+		if not _ensure_target_submitted(doc):
+			skipped.append(
+				{
+					"queue_name": queue_name,
+					"reason": "target_not_submitted",
+					"target_docstatus": getattr(doc, "target_docstatus", None),
+					"error_message": getattr(doc, "error_message", None),
+				}
+			)
 			continue
 
 		doc.approval_status = "Approved"
 		doc.approved_by = frappe.session.user
 		doc.approved_at = _now()
 		doc.rejection_reason = None
-		if doc.sync_status == "failed_permanent":
+		if doc.sync_status != "sent":
 			doc.sync_status = "pending"
+			doc.error_message = None
 		doc.save(ignore_permissions=True)
 		approved.append(doc.name)
 
 	if approved:
-		frappe.enqueue(
-			"healthcare.healthcare.khanza_main.send_many",
-			queue_names=approved,
-			queue="long",
-		)
+		send_summary = _enqueue_send_many(approved)
+	else:
+		send_summary = _queue_status_summary([])
 
 	return {
 		"status": "ok",
@@ -167,6 +347,7 @@ def approve_many(queue_names=None, names=None):
 		"skipped_count": len(skipped),
 		"approved": approved,
 		"skipped": skipped,
+		"send_summary": send_summary,
 	}
 
 @frappe.whitelist(allow_guest=True)
@@ -174,7 +355,7 @@ def reject(queue_name, reason):
 	frappe.only_for(("System Manager", "Healthcare Administrator"))
 	doc = frappe.get_doc(QUEUE_DOCTYPE, queue_name)
 	if doc.sync_status == "sent":
-		frappe.throw(_("Sent queue item cannot be rejected"))
+		frappe.throw(_("Sent sync record cannot be rejected"))
 	doc.approval_status = "Rejected"
 	doc.rejection_reason = reason
 	doc.save(ignore_permissions=True)
@@ -206,13 +387,16 @@ def retry(queue_name=None, external_id=None):
 			"healthcare.healthcare.khanza_main.process_import_queue_item",
 			queue_name=doc.name,
 			queue="long",
+			enqueue_after_commit=True,
 		)
 		doc.import_status = IMPORT_STATUS_PENDING
 		doc.error_message = None
 		return _queue_response(doc, "import_retry_initiated")
 
 	if doc.approval_status != "Approved":
-		frappe.throw(_("Only approved queue items can be retried for SatuSehat sending"))
+		frappe.throw(_("Only approved sync records can be retried for SatuSehat sending"))
+	if not _ensure_target_submitted(doc):
+		frappe.throw(_(doc.error_message))
 
 	frappe.db.set_value(
 		QUEUE_DOCTYPE,
@@ -223,14 +407,118 @@ def retry(queue_name=None, external_id=None):
 		},
 		update_modified=True,
 	)
-	frappe.enqueue(
-		"healthcare.healthcare.khanza_main.send_queue_item",
-		queue_name=doc.name,
-		queue="long",
+	summary = _enqueue_send_many([doc.name])
+	doc.reload()
+	response = _queue_response(doc, "retry_initiated")
+	response["send_summary"] = summary
+	return response
+
+@frappe.whitelist(allow_guest=True)
+def process_approved(limit=200):
+	frappe.only_for(("System Manager", "Healthcare Administrator"))
+	limit = int(limit or 200)
+	release_waiting_dependencies()
+	items = frappe.get_all(
+		QUEUE_DOCTYPE,
+		filters={
+			"import_status": IMPORT_STATUS_IMPORTED,
+			"approval_status": "Approved",
+			"sync_status": ["in", ["pending", "failed"]],
+		},
+		fields=["name"],
+		limit_page_length=limit,
 	)
-	doc.sync_status = "pending"
-	doc.error_message = None
-	return _queue_response(doc, "retry_initiated")
+	queue_names = []
+	skipped = []
+	for item in items:
+		doc = frappe.get_doc(QUEUE_DOCTYPE, item.name)
+		if _ensure_target_submitted(doc):
+			queue_names.append(doc.name)
+		else:
+			skipped.append(
+				{
+					"queue_name": doc.name,
+					"reason": "target_not_submitted",
+					"target_docstatus": getattr(doc, "target_docstatus", None),
+					"error_message": getattr(doc, "error_message", None),
+				}
+			)
+	summary = _enqueue_send_many(queue_names)
+	return {
+		"status": "ok",
+		"message": "approved_pending_queued",
+		"count": len(queue_names),
+		"skipped_count": len(skipped),
+		"queue_names": queue_names,
+		"skipped": skipped,
+		"send_summary": summary,
+	}
+
+@frappe.whitelist(allow_guest=True)
+def approve_pending_and_process(limit=200):
+	frappe.only_for(("System Manager", "Healthcare Administrator"))
+	limit = int(limit or 200)
+	release_waiting_dependencies()
+	items = frappe.get_all(
+		QUEUE_DOCTYPE,
+		filters={
+			"import_status": ["in", [IMPORT_STATUS_PENDING, IMPORT_STATUS_FAILED, IMPORT_STATUS_IMPORTED]],
+			"approval_status": ["in", ["Pending", "Approved"]],
+			"sync_status": ["in", ["pending", "failed"]],
+		},
+		fields=["name"],
+		order_by="creation asc",
+		limit_page_length=limit,
+	)
+	queue_names = []
+	skipped = []
+	for item in items:
+		doc = frappe.get_doc(QUEUE_DOCTYPE, item.name)
+		if not _ensure_imported(doc):
+			skipped.append(
+				{
+					"queue_name": doc.name,
+					"reason": "not_imported",
+					"import_status": getattr(doc, "import_status", None),
+					"error_message": getattr(doc, "error_message", None),
+				}
+			)
+			continue
+		if not _ensure_target_submitted(doc):
+			skipped.append(
+				{
+					"queue_name": doc.name,
+					"reason": "target_not_submitted",
+					"target_docstatus": getattr(doc, "target_docstatus", None),
+					"error_message": getattr(doc, "error_message", None),
+				}
+			)
+			continue
+		frappe.db.set_value(
+			QUEUE_DOCTYPE,
+			doc.name,
+			{
+				"approval_status": "Approved",
+				"approved_by": frappe.session.user,
+				"approved_at": _now(),
+				"rejection_reason": None,
+				"sync_status": "pending",
+				"error_message": None,
+			},
+			update_modified=True,
+		)
+		queue_names.append(doc.name)
+
+	summary = _enqueue_send_many(queue_names)
+	return {
+		"status": "ok",
+		"message": "pending_approved_and_queued",
+		"count": len(queue_names),
+		"skipped_count": len(skipped),
+		"queue_names": queue_names,
+		"skipped": skipped,
+		"send_summary": summary,
+	}
 
 @frappe.whitelist(allow_guest=True)
 def status(external_id=None, queue_name=None):
@@ -251,6 +539,7 @@ def status(external_id=None, queue_name=None):
 			"error_message": doc.error_message,
 			"target_doctype": getattr(doc, "target_doctype", None),
 			"target_docname": getattr(doc, "target_docname", None),
+			"target_docstatus": getattr(doc, "target_docstatus", None),
 			"sent_at": doc.sent_at,
 		},
 	}
