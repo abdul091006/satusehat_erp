@@ -36,6 +36,18 @@ frappe.ui.form.on("Khanza SatuSehat Sync Record", {
 			});
 		}
 
+		if (frm.doc.import_status === "imported" && frm.doc.approval_status === "Approved" && target_is_submitted && ["pending", "waiting", "failed"].includes(frm.doc.sync_status)) {
+			frm.add_custom_button(__("Enqueue Send"), () => {
+				frappe.call({
+					method: "healthcare.healthcare.khanza_main.retry",
+					args: { queue_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Enqueueing SatuSehat job..."),
+					callback: () => frm.reload_doc(),
+				});
+			});
+		}
+
 		if (frm.doc.import_status === "imported" && frm.doc.approval_status !== "Rejected" && frm.doc.sync_status !== "sent") {
 			frm.add_custom_button(__("Needs Correction"), () => {
 				frappe.prompt(

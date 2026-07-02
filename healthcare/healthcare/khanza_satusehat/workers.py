@@ -1,4 +1,4 @@
-﻿import copy
+﻿﻿import copy
 import hashlib
 import re
 import time

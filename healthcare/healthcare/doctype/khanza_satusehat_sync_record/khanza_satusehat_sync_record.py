@@ -7,7 +7,6 @@ from healthcare.healthcare.khanza_satusehat.constants import (
 	VALIDATION_STATUS_UNCHECKED,
 )
 
-
 class KhanzaSatuSehatSyncRecord(Document):
 	def before_insert(self):
 		self.source_system = self.source_system or "khanza"
