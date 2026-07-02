@@ -3,7 +3,7 @@
  "allow_import": 1,
  "allow_rename": 1,
  "autoname": "field:patient_care_type",
- "beta": 1,
+ "beta": 0,
  "creation": "2018-11-18 14:18:25.167468",
  "doctype": "DocType",
  "editable_grid": 1,

@@ -1,0 +1,20 @@
+{
+  "alergi": [
+    {
+      "keyword": "Gluten",
+      "category": "food",
+      "coding_system": "http://snomed.info/sct",
+      "coding_code": "89811004",
+      "coding_display": "Gluten (substance)",
+      "text": "Gluten"
+    },
+    {
+      "keyword": "Amoxicillin",
+      "category": "medication",
+      "coding_system": "http://www.whocc.no/atc",
+      "coding_code": "J01CA04",
+      "coding_display": "Amoxicillin",
+      "text": "Amoxicillin"
+    }
+  ]
+}

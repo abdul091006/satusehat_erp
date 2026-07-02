@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_import": 1,
- "beta": 1,
+ "beta": 0,
  "creation": "2017-06-21 13:02:56.122897",
  "doctype": "DocType",
  "editable_grid": 1,
@@ -87,6 +87,7 @@
    "fetch_from": "code_system.experimental",
    "fieldname": "experimental",
    "fieldtype": "Check",
+   "hidden": 1,
    "label": "Experimental",
    "read_only": 1
   },

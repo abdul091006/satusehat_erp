@@ -127,6 +127,108 @@ doc_events = {
 	"Patient": {
 		"after_insert": "healthcare.regional.india.abdm.utils.set_consent_attachment_details"
 	},
+	"Patient Encounter": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Vital Signs": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Diagnosis": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Clinical Procedure": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Service Request": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Specimen": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Observation": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Diagnostic Report": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Medication": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Medication Request": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Patient Assessment": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Clinical Note": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Therapy Plan": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Immunization": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Medication Dispense": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Medication Statement": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
+	"Questionnaire Response": {
+		"on_update": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_cancel": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+		"on_update_after_submit": "healthcare.healthcare.khanza_satusehat.document_events.sync_queue_target_docstatus",
+	},
 }
 
 scheduler_events = {

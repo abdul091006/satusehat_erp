@@ -2,7 +2,7 @@
  "actions": [],
  "allow_auto_repeat": 1,
  "autoname": "naming_series:",
- "beta": 1,
+ "beta": 0,
  "creation": "2020-09-09 15:30:33.141582",
  "doctype": "DocType",
  "editable_grid": 1,
@@ -480,7 +480,12 @@
    "report": 1,
    "role": "System Manager",
    "share": 1,
-   "write": 1
+   "write": 1,
+   "permlevel": 0,
+   "select": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1
   },
   {
    "create": 1,
@@ -512,7 +517,12 @@
    "report": 1,
    "role": "Healthcare Administrator",
    "share": 1,
-   "write": 1
+   "write": 1,
+   "permlevel": 0,
+   "select": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1
   }
  ],
  "restrict_to_domain": "Healthcare",
