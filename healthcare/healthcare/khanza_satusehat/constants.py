@@ -1,4 +1,4 @@
-﻿SYNC_RECORD_DOCTYPE = "Khanza SatuSehat Sync Record"
+SYNC_RECORD_DOCTYPE = "Khanza SatuSehat Sync Record"
 QUEUE_DOCTYPE = SYNC_RECORD_DOCTYPE
 LOG_DOCTYPE = "Khanza SatuSehat Sync Log"
 FHIR_FIELD_DOCTYPE = "FHIR Field"
@@ -64,4 +64,3 @@ RESOURCE_TARGETS = {
 	"QuestionnaireResponse": "Questionnaire Response",
 	"AllergyIntolerance": "Clinical Note",
 }
-

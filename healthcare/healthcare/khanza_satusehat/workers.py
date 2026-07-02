@@ -1511,4 +1511,3 @@ def send_queue_item(queue_name):
             },
         )
         raise
-

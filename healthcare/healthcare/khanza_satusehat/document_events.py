@@ -148,4 +148,3 @@ def sync_all_queue_target_docstatus():
 		)
 
 	frappe.db.commit()
-

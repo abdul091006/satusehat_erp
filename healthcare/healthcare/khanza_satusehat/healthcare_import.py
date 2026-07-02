@@ -1753,4 +1753,3 @@ def backfill_khanza_source_fields(limit=500):
 		"updated": updated,
 		"skipped": skipped,
 	}
-
