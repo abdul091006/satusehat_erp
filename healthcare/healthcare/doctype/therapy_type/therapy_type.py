@@ -100,6 +100,10 @@ class TherapyType(Document):
 
 
 def create_item_from_therapy(doc):
+	if doc.item_code and frappe.db.exists("Item", doc.item_code):
+		doc.db_set("item", doc.item_code)
+		return
+
 	disabled = doc.disabled
 	if doc.is_billable and not doc.disabled:
 		disabled = 0

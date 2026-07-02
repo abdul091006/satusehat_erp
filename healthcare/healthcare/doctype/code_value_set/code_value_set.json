@@ -2,7 +2,7 @@
  "actions": [],
  "allow_rename": 1,
  "autoname": "field:value_set",
- "beta": 1,
+ "beta": 0,
  "creation": "2023-12-28 16:17:20.877603",
  "doctype": "DocType",
  "engine": "InnoDB",

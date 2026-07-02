@@ -6,6 +6,7 @@ healthcare.patches.v15_0.set_fee_validity_status
 healthcare.patches.v15_0.create_custom_fields_in_sales_invoice_item
 healthcare.patches.v15_0.rename_automate_appointment_invoicing
 healthcare.patches.v15_0.rename_medical_code_standard_and_medical_code
+healthcare.patches.v15_0.rename_khanza_satusehat_sync_record_doctype
 healthcare.patches.v15_0.setup_service_request
 healthcare.patches.v15_0.add_observation_to_patient_history
 healthcare.patches.v15_0.create_patient_medical_records_for_observations #25-12-2024
@@ -20,3 +21,4 @@ healthcare.patches.v15_0.setup_order_status_codes
 healthcare.patches.v15_0.set_observation_and_diagnostic_report_status
 healthcare.patches.v15_0.update_patient_history_settings_for_lab_test
 healthcare.patches.v15_0.add_custom_fields_if_not_exists
+healthcare.patches.v15_0.normalize_khanza_satusehat_review_status

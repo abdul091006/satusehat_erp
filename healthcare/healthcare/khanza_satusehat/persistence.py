@@ -1,4 +1,4 @@
-import frappe
+﻿import frappe
 
 from .constants import QUEUE_DOCTYPE
 from .utils import _json_dumps
@@ -31,8 +31,6 @@ def _store_satusehat_resource_id(queue_doc, fhir, resource_id):
 	target_updates = {}
 	if target_meta.has_field("satusehat_resource_id"):
 		target_updates["satusehat_resource_id"] = resource_id
-	if target_meta.has_field("khanza_fhir_payload"):
-		target_updates["khanza_fhir_payload"] = _json_dumps(fhir)
 
 	if target_updates:
 		frappe.db.set_value(
@@ -50,3 +48,4 @@ def _safe_store_satusehat_resource_id(queue_doc, fhir, resource_id):
 			title=f"Khanza SatuSehat Resource ID Store Error: {queue_doc.name}",
 			message=frappe.get_traceback(),
 		)
+

@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 0,
- "autoname": "format:KSSQ-{YYYY}-{#####}",
+ "autoname": "format:KSSR-{YYYY}-{#####}",
  "creation": "2026-06-04 00:00:00.000000",
  "doctype": "DocType",
  "document_type": "Document",
@@ -19,6 +19,13 @@
   "imported_at",
   "target_doctype",
   "target_docname",
+  "target_docstatus",
+  "review_section",
+  "review_status",
+  "revision_no",
+  "validation_status",
+  "validation_summary",
+  "last_review_event_at",
   "approval_section",
   "approval_status",
   "approved_by",
@@ -32,6 +39,7 @@
   "error_message",
   "payload_section",
   "payload",
+  "source_payload",
   "fhir_payload",
   "logs_section",
   "logs"
@@ -51,7 +59,7 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "label": "FHIR Resource Type",
+   "label": "Resource Type",
    "reqd": 1
   },
   {
@@ -72,7 +80,7 @@
    "default": "POST",
    "fieldname": "method",
    "fieldtype": "Select",
-   "label": "SatuSehat Method",
+   "label": "HTTP Method",
    "options": "POST\nPUT",
    "reqd": 1
   },
@@ -91,7 +99,6 @@
    "default": "pending",
    "fieldname": "import_status",
    "fieldtype": "Select",
-   "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Import Status",
    "options": "pending\nprocessing\nimported\nfailed\nfailed_permanent",
@@ -115,6 +122,61 @@
    "fieldtype": "Dynamic Link",
    "label": "Target Document",
    "options": "target_doctype",
+   "read_only": 1
+  },
+  {
+   "default": "Draft",
+   "fieldname": "target_docstatus",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "ERPNext Document Status",
+   "options": "Draft\nSubmitted\nCancelled",
+   "read_only": 1
+  },
+  {
+   "fieldname": "review_section",
+   "fieldtype": "Section Break",
+   "label": "Review & Analytics"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "review_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Review Status",
+   "options": "Pending\nNeeds Correction\nApproved\nRejected",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "revision_no",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Revision No",
+   "read_only": 1
+  },
+  {
+   "default": "unchecked",
+   "fieldname": "validation_status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Validation Status",
+   "options": "unchecked\nvalid\nwarning\nerror",
+   "read_only": 1
+  },
+  {
+   "fieldname": "validation_summary",
+   "fieldtype": "Small Text",
+   "label": "Validation Summary",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_review_event_at",
+   "fieldtype": "Datetime",
+   "label": "Last Review Event At",
    "read_only": 1
   },
   {
@@ -162,7 +224,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "SatuSehat Status",
-   "options": "pending\nprocessing\nsent\nfailed\nfailed_permanent",
+   "options": "pending\nwaiting\nprocessing\nsent\nfailed\nfailed_permanent",
    "read_only": 1,
    "reqd": 1
   },
@@ -205,11 +267,18 @@
    "reqd": 1
   },
   {
+   "fieldname": "source_payload",
+   "fieldtype": "Code",
+   "label": "Khanza Source Payload",
+   "options": "JSON",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
    "fieldname": "fhir_payload",
    "fieldtype": "Code",
-   "label": "FHIR Payload",
-   "options": "JSON",
-   "reqd": 1
+   "label": "Generated FHIR Payload",
+   "options": "JSON"
   },
   {
    "fieldname": "logs_section",
@@ -230,7 +299,7 @@
  "modified": "2026-06-04 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Healthcare",
- "name": "Khanza SatuSehat Queue",
+ "name": "Khanza SatuSehat Sync Record",
  "owner": "Administrator",
  "permissions": [
   {

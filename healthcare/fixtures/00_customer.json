@@ -1,0 +1,12 @@
+[
+ {
+  "doctype": "Customer",
+  "name": "ARDIANTO PUTRA",
+  "customer_name": "ARDIANTO PUTRA",
+  "customer_type": "Individual",
+  "customer_group": "Individual",
+  "territory": "All Territories",
+  "default_currency": "IDR",
+  "disabled": 0
+ }
+]

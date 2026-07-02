@@ -1,0 +1,14 @@
+[
+ {
+  "doctype": "Clinical Procedure Template",
+  "name": "Imported Khanza Procedure",
+  "template": "Imported Khanza Procedure",
+  "link_existing_item": 1,
+  "item": "Imported Khanza Procedure",
+  "item_code": "Imported Khanza Procedure",
+  "item_group": "All Item Groups",
+  "description": "Default procedure template for imported Khanza SatuSehat fixture data.",
+  "is_billable": 0,
+  "disabled": 0
+ }
+]

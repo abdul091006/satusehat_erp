@@ -7,30 +7,146 @@
  "document_type": "Document",
  "editable_grid": 0,
  "engine": "InnoDB",
- "field_order": ["patient","patient_name","practitioner","occurred_at","status","code","code_display","encounter_reference","note","fhir_section","khanza_queue","khanza_external_id","khanza_function","satusehat_resource_type","satusehat_resource_id","khanza_patient_reference","khanza_encounter_reference","khanza_fhir_fields","khanza_fhir_payload"],
+ "field_order": [
+  "patient",
+  "patient_name",
+  "practitioner",
+  "occurred_at",
+  "status",
+  "code",
+  "code_display",
+  "encounter_reference",
+  "note",
+  "fhir_section",
+  "khanza_queue",
+  "khanza_external_id",
+  "khanza_function",
+  "satusehat_resource_type",
+  "satusehat_resource_id",
+  "khanza_patient_reference",
+  "khanza_encounter_reference",
+  "khanza_fhir_fields",
+  "khanza_fhir_payload"
+ ],
  "fields": [
-  {"fieldname":"patient","fieldtype":"Link","label":"Patient","options":"Patient","in_list_view":1},
-  {"fieldname":"patient_name","fieldtype":"Data","label":"Patient Name","in_list_view":1},
-  {"fieldname":"practitioner","fieldtype":"Link","label":"Practitioner","options":"Healthcare Practitioner"},
-  {"fieldname":"occurred_at","fieldtype":"Datetime","label":"Occurred At","in_list_view":1},
-  {"fieldname":"status","fieldtype":"Data","label":"FHIR Status","in_list_view":1},
-  {"fieldname":"code","fieldtype":"Data","label":"Code"},
-  {"fieldname":"code_display","fieldtype":"Data","label":"Vaccine"},
-  {"fieldname":"encounter_reference","fieldtype":"Data","label":"FHIR Encounter Reference"},
-  {"fieldname":"note","fieldtype":"Text Editor","label":"Note"},
-  {"fieldname":"fhir_section","fieldtype":"Section Break","label":"FHIR"},
-  {"fieldname":"khanza_queue","fieldtype":"Link","label":"Source Queue","options":"Khanza SatuSehat Queue","read_only":1},
-  {"fieldname":"khanza_external_id","fieldtype":"Data","label":"External ID","read_only":1,"unique":1},
-  {"fieldname":"khanza_function","fieldtype":"Data","label":"Source Function","read_only":1},
-  {"fieldname":"satusehat_resource_type","fieldtype":"Data","label":"FHIR Resource Type","read_only":1},
-  {"fieldname":"satusehat_resource_id","fieldtype":"Data","label":"FHIR Resource ID","read_only":1},
-  {"fieldname":"khanza_patient_reference","fieldtype":"Data","label":"FHIR Patient Reference","read_only":1},
-  {"fieldname":"khanza_encounter_reference","fieldtype":"Data","label":"FHIR Encounter Reference","read_only":1},
-  {"fieldname":"khanza_fhir_fields","fieldtype":"Table","label":"FHIR Fields","options":"FHIR Field","read_only":1},
-  {"fieldname":"khanza_fhir_payload","fieldtype":"Code","label":"FHIR Payload","options":"JSON","read_only":1}
+  {
+   "fieldname": "patient",
+   "fieldtype": "Link",
+   "label": "Patient",
+   "options": "Patient",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "patient_name",
+   "fieldtype": "Data",
+   "label": "Patient Name",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "practitioner",
+   "fieldtype": "Link",
+   "label": "Practitioner",
+   "options": "Healthcare Practitioner"
+  },
+  {
+   "fieldname": "occurred_at",
+   "fieldtype": "Datetime",
+   "label": "Occurred At",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Data",
+   "label": "FHIR Status",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "code",
+   "fieldtype": "Data",
+   "label": "Code"
+  },
+  {
+   "fieldname": "code_display",
+   "fieldtype": "Data",
+   "label": "Vaccine"
+  },
+  {
+   "fieldname": "encounter_reference",
+   "fieldtype": "Data",
+   "label": "FHIR Encounter Reference"
+  },
+  {
+   "fieldname": "note",
+   "fieldtype": "Text Editor",
+   "label": "Note"
+  },
+  {
+   "fieldname": "fhir_section",
+   "fieldtype": "Section Break",
+   "label": "FHIR"
+  },
+  {
+   "fieldname": "khanza_queue",
+   "fieldtype": "Link",
+   "label": "Source Sync Record",
+   "options": "Khanza SatuSehat Sync Record",
+   "read_only": 1
+  },
+  {
+   "fieldname": "khanza_external_id",
+   "fieldtype": "Data",
+   "label": "External ID",
+   "read_only": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "khanza_function",
+   "fieldtype": "Data",
+   "label": "Source Function",
+   "read_only": 1
+  },
+  {
+   "fieldname": "satusehat_resource_type",
+   "fieldtype": "Data",
+   "label": "FHIR Resource Type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "satusehat_resource_id",
+   "fieldtype": "Data",
+   "label": "FHIR Resource ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "khanza_patient_reference",
+   "fieldtype": "Data",
+   "label": "FHIR Patient Reference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "khanza_encounter_reference",
+   "fieldtype": "Data",
+   "label": "FHIR Encounter Reference",
+   "read_only": 1
+  },
+  {
+   "fieldname": "khanza_fhir_fields",
+   "fieldtype": "Table",
+   "label": "FHIR Fields",
+   "options": "FHIR Field",
+   "read_only": 1
+  },
+  {
+   "fieldname": "khanza_fhir_payload",
+   "fieldtype": "Code",
+   "label": "FHIR Payload",
+   "options": "JSON",
+   "read_only": 1
+  }
  ],
  "idx": 0,
  "index_web_pages_for_search": 1,
+ "is_submittable": 1,
  "links": [],
  "modified": "2026-06-05 00:00:00.000000",
  "modified_by": "Administrator",
@@ -38,8 +154,40 @@
  "name": "Immunization",
  "owner": "Administrator",
  "permissions": [
-  {"create":1,"delete":1,"email":1,"export":1,"print":1,"read":1,"report":1,"role":"System Manager","share":1,"write":1},
-  {"create":1,"delete":0,"email":1,"export":1,"print":1,"read":1,"report":1,"role":"Healthcare Administrator","share":1,"write":1}
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1,
+   "permlevel": 0,
+   "select": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Healthcare Administrator",
+   "share": 1,
+   "write": 1,
+   "permlevel": 0,
+   "select": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1
+  }
  ],
  "sort_field": "modified",
  "sort_order": "DESC",

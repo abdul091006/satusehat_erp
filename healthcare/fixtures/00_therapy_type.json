@@ -1,0 +1,13 @@
+[
+ {
+  "doctype": "Therapy Type",
+  "name": "Imported Khanza Therapy",
+  "therapy_type": "Imported Khanza Therapy",
+  "item_code": "Imported Khanza Therapy",
+  "item_group": "All Item Groups",
+  "item_name": "Imported Khanza Therapy",
+  "description": "Default therapy type for imported Khanza CarePlan fixture data.",
+  "is_billable": 0,
+  "disabled": 0
+ }
+]

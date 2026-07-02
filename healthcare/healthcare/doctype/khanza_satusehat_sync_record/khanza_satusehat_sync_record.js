@@ -1,21 +1,43 @@
-frappe.ui.form.on("Khanza SatuSehat Queue", {
+frappe.ui.form.on("Khanza SatuSehat Sync Record", {
 	refresh(frm) {
 		if (frm.doc.docstatus !== 0) {
 			return;
 		}
 
+		if (frm.doc.target_doctype && frm.doc.target_docname) {
+			frm.add_custom_button(__("Open Target Document"), () => {
+				frappe.set_route("Form", frm.doc.target_doctype, frm.doc.target_docname);
+			});
+		}
+
 		if (frm.doc.import_status === "imported" && frm.doc.approval_status !== "Approved") {
-			frm.add_custom_button(__("Approve & Send"), () => {
+			frm.add_custom_button(__("Approve & Queue Send"), () => {
 				frappe.call({
 					method: "healthcare.healthcare.khanza_main.approve",
 					args: { queue_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Approving and queueing SatuSehat send..."),
+					callback: () => frm.reload_doc(),
+				});
+			});
+		}
+
+		const target_is_submitted = frm.doc.target_docstatus === "Submitted";
+
+		if (frm.doc.import_status === "imported" && frm.doc.approval_status === "Approved" && target_is_submitted && ["pending", "waiting", "failed"].includes(frm.doc.sync_status)) {
+			frm.add_custom_button(__("Enqueue Send"), () => {
+				frappe.call({
+					method: "healthcare.healthcare.khanza_main.retry",
+					args: { queue_name: frm.doc.name },
+					freeze: true,
+					freeze_message: __("Enqueueing SatuSehat job..."),
 					callback: () => frm.reload_doc(),
 				});
 			});
 		}
 
 		if (frm.doc.import_status === "imported" && frm.doc.approval_status !== "Rejected" && frm.doc.sync_status !== "sent") {
-			frm.add_custom_button(__("Reject"), () => {
+			frm.add_custom_button(__("Needs Correction"), () => {
 				frappe.prompt(
 					[
 						{
@@ -27,12 +49,12 @@ frappe.ui.form.on("Khanza SatuSehat Queue", {
 					],
 					(values) => {
 						frappe.call({
-							method: "healthcare.healthcare.khanza_main.reject",
+							method: "healthcare.healthcare.khanza_main.needs_correction",
 							args: { queue_name: frm.doc.name, reason: values.reason },
 							callback: () => frm.reload_doc(),
 						});
 					},
-					__("Reject SatuSehat Queue Item")
+					__("Mark SatuSehat Sync Record as Needs Correction")
 				);
 			});
 		}
